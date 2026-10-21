@@ -3,6 +3,7 @@ import copy
 import xml.etree.ElementTree as ET
 
 from . import xmltree
+from .errors import KpmergeError
 from .report import Conflict, Report
 
 
@@ -109,9 +110,14 @@ def _merge_level(a: ET.Element | None, b: ET.Element | None, path: str,
 
     subs_a: dict[str, ET.Element] = {}
     subs_b: dict[str, ET.Element] = {}
-    for node, subs in ((a, subs_a), (b, subs_b)):
+    for side, node, subs in (("A", a, subs_a), ("B", b, subs_b)):
         for g in node.findall("Group") if node is not None else []:
-            subs.setdefault(_name(g), g)  # same-name subgroups on one side: not handled
+            if _name(g) in subs:
+                dup = f"{path}/{_name(g)}" if path else _name(g)
+                raise KpmergeError(
+                    f"Same-name sibling subgroups in {side}: {dup} "
+                    "- rename them in KeePassXC before merging.")
+            subs[_name(g)] = g
     names = list(subs_a) + [n for n in subs_b if n not in subs_a]
     for name in names:
         sub_path = f"{path}/{name}" if path else name

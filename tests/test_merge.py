@@ -2,6 +2,7 @@ import unittest
 import xml.etree.ElementTree as ET
 
 from kpmergelib import xmltree
+from kpmergelib.errors import KpmergeError
 from kpmergelib.merge import merge_groups
 from kpmergelib.report import Conflict, format_report
 from tests.kpxml import E, G, make_doc
@@ -121,6 +122,16 @@ class MergeTest(unittest.TestCase):
             self.assertNotIn(forbidden, text)
         self.assertIn("site", text)
         self.assertRegex(format_report(report), r"by A: 0.*by B: 1")
+
+    def test_homonymous_subgroups_rejected(self):
+        dup = G("Personal", groups=[G("Bank", [E("x", "u")]), G("Bank", [E("y", "u")])])
+        for side, a, b in (("A", G("A", groups=[dup]), G("B")),
+                           ("B", G("A"), G("B", groups=[dup]))):
+            with self.subTest(side=side):
+                with self.assertRaises(KpmergeError) as ctx:
+                    run(a, b)
+                msg = str(ctx.exception)
+                self.assertIn(f"in {side}: Personal/Bank", msg)
 
 
 if __name__ == "__main__":
