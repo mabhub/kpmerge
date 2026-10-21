@@ -65,7 +65,8 @@ class _Pool:
         return self.ids.setdefault(content, str(len(self.ids)))
 
 
-def _entry(parent: ET.Element, e: E, entry_uuid: str, pool: _Pool) -> ET.Element:
+def _entry(parent: ET.Element, e: E, entry_uuid: str, pool: _Pool,
+           in_history: bool = False) -> ET.Element:
     el = _sub(parent, "Entry")
     _sub(el, "UUID", entry_uuid)
     _sub(el, "IconID", "0")
@@ -94,9 +95,10 @@ def _entry(parent: ET.Element, e: E, entry_uuid: str, pool: _Pool) -> ET.Element
     _sub(at, "Enabled", "True")
     _sub(at, "DataTransferObfuscation", "0")
     _sub(at, "DefaultSequence")
-    hist = _sub(el, "History")
-    for h in e.history:
-        _entry(hist, h, entry_uuid, pool)
+    if not in_history:  # keepassxc-cli import rejects a <History> inside a history version
+        hist = _sub(el, "History")
+        for h in e.history:
+            _entry(hist, h, entry_uuid, pool, in_history=True)
     return el
 
 
