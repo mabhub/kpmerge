@@ -4,7 +4,13 @@ Merges two groups of a KeePassXC database into a third group of the same databas
 
 Use case: a Bitwarden vault imported twice gives two nearly identical groups. `keepassxc-cli merge` and the merge in the graphical interface pair entries by UUID, but each import generates new UUIDs. `kpmerge` pairs entries by their content.
 
-Python 3, standard library only. Only `keepassxc-cli` is called to read and write the database. Tested with KeePassXC 2.7.12.
+## Requirements
+
+- Linux: the script needs `memfd_create` and `/dev/shm`. It also uses `prctl` and `mlockall`, and only prints a warning if they fail.
+- Python 3.10 or later, standard library only.
+- `keepassxc-cli` from KeePassXC 2.7 or later, in `PATH`. Tested with 2.7.12. It is the only tool used to read and write the database.
+- A database protected by a password only (no key file, no hardware key). With a key file or a hardware key, the first export fails with the same "invalid credentials" error as a wrong password.
+- An `env` that supports `-S` (GNU coreutils 8.30 or later) for the launcher's shebang. Otherwise, for example on Alpine (BusyBox), run `python3 -I kpmerge ...`.
 
 ## Installation
 
@@ -137,3 +143,7 @@ python3 -m unittest discover -t . -s tests
 ```
 
 Tests work on dummy databases in a temporary directory, with a test password. Integration tests are skipped if `keepassxc-cli` is missing.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The software is provided without warranty: keep the backup until you have checked the merged group.
