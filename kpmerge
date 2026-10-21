@@ -3,6 +3,10 @@
 import os
 import sys
 
+# Checked before importing kpmergelib, whose type annotations need Python 3.10.
+if sys.version_info < (3, 10):
+    sys.exit("Error: kpmerge requires Python 3.10 or later.")
+
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
 import kpmergelib.cli  # noqa: E402
