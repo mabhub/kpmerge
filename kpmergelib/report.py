@@ -68,6 +68,7 @@ def format_report(r: Report) -> str:
         f"Merged entries: {r.merged} (won by A: {won_a}, by B: {won_b})",
         f"Only in A: {r.only_a}",
         f"Only in B: {r.only_b}",
+        f"Duplicate keys: {len(r.duplicates)}",
         f"Total entries after merge: {r.total_entries}",
     ]
     if r.conflicts:

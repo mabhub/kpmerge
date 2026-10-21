@@ -146,6 +146,7 @@ class DuplicatesAndRescueTest(unittest.TestCase):
         self.assertEqual(report.duplicates, [Duplicate("", "Note", 2, 1)])
         self.assertEqual((report.merged, report.identical, report.only_a, report.only_b), (0, 0, 0, 0))
         self.assertEqual(report.total_entries, 3)
+        self.assertIn("Duplicate keys: 1", format_report(report))
 
     def test_moved_entry_rescued_by_hash(self):
         a = G("A", groups=[G("Personal", [E("X", "u", "", "pw", mtime=T1)])])
