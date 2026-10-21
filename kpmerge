@@ -1,0 +1,10 @@
+#!/usr/bin/env -S python3 -I
+"""Merge two groups of a KeePassXC database (see README.md)."""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+
+import kpmergelib.cli  # noqa: E402
+
+sys.exit(kpmergelib.cli.main())
