@@ -102,6 +102,19 @@ class XmlTreeTest(unittest.TestCase):
         doc = parse([G("g", entries=[E("e", history=[E("e", attachments={"h": b"hist"})])])])
         self.assertIn(b"hist", load_binaries(doc).values())
 
+    def test_unreadable_attachment_raises_without_content(self):
+        doc = parse([G("g", entries=[E("Heading", attachments={"a.txt": b"SECRET"})])])
+        entry, bins = find_entry(doc, "g", "Heading"), load_binaries(doc)
+        value = entry.find("Binary/Value")
+        for mutate in (lambda: value.set("Ref", "unknown"), lambda: value.attrib.pop("Ref"),
+                       lambda: entry.find("Binary").remove(value)):
+            mutate()
+            with self.assertRaises(KpmergeError) as cm:
+                fingerprint(entry, bins)
+            self.assertIn("a.txt", str(cm.exception))
+            self.assertIn("Heading", str(cm.exception))
+            self.assertNotIn("SECRET", str(cm.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

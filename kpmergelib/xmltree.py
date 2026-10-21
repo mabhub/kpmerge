@@ -3,6 +3,7 @@ import base64
 import gzip
 import hashlib
 import xml.etree.ElementTree as ET
+from collections import Counter
 from collections.abc import Iterator
 from datetime import datetime, timezone
 
@@ -100,13 +101,18 @@ def load_binaries(doc: ET.Element) -> dict[str, bytes]:
 def _attachments(entry: ET.Element, binaries: dict[str, bytes]) -> dict[str, bytes]:
     out = {}
     for b in entry.findall("Binary"):
-        ref = b.find("Value").get("Ref") if b.find("Value") is not None else None
-        out[b.findtext("Key") or ""] = binaries.get(ref, b"")
+        name = b.findtext("Key") or ""
+        value = b.find("Value")
+        ref = value.get("Ref") if value is not None else None
+        if ref is None or ref not in binaries:
+            raise KpmergeError(f"Unreadable attachment '{name}' "
+                               f"in entry '{entry_title(entry)}'")
+        out[name] = binaries[ref]
     return out
 
 
 def _expiry(entry: ET.Element) -> str:
-    """'' if the entry does not expire, else the expiry date."""
+    """'False' if the entry does not expire, else the expiry date."""
     if (entry.findtext("Times/Expires") or "").strip() == "True":
         return "True:" + (entry.findtext("Times/ExpiryTime") or "")
     return "False"
@@ -134,6 +140,16 @@ def fingerprint(entry: ET.Element, binaries: dict[str, bytes]) -> bytes:
         put(name.encode(), hashlib.sha256(content).digest())
     put(_tags(entry).encode(), _expiry(entry).encode())
     return h.digest()
+
+
+def fingerprints_with_history(group: ET.Element, binaries: dict[str, bytes]) -> Counter[bytes]:
+    """Multiset of the fingerprints of the group's entries and of their history versions."""
+    out: Counter[bytes] = Counter()
+    for _, entry in iter_entries(group):
+        out[fingerprint(entry, binaries)] += 1
+        for version in entry.findall("History/Entry"):
+            out[fingerprint(version, binaries)] += 1
+    return out
 
 
 def diff_fields(a: ET.Element, b: ET.Element, binaries: dict[str, bytes]) -> list[str]:

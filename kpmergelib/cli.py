@@ -102,7 +102,6 @@ def _merge(doc: ET.Element, target: Target) -> tuple[ET.Element, Report]:
 
 
 def _confirmed(db: Path, target: Target, confirm: Callable[[str], str]) -> bool:
-    print("\nClose or lock the database in KeePassXC before continuing.")
     try:
         answer = confirm(f"Create group '{target.dest_path}' in {db}? [y/N] ")
     except EOFError:
@@ -137,23 +136,27 @@ def _canonical(group: ET.Element) -> str:
 
 
 def _verify(db: Path, password: bytes, before: ET.Element, target: Target,
-            expected: int, backup: Path) -> None:
+            merged: ET.Element, expected: int, backup: Path) -> None:
     after = _export(db, password)
     problems = []
     try:
-        count = sum(1 for _ in xmltree.iter_entries(xmltree.find_group(after, target.dest_path)))
+        chain = xmltree.group_chain(after, target.dest_path)
+        dest = chain[-1]
+        count = sum(1 for _ in xmltree.iter_entries(dest))
         if count != expected:
             problems.append(f"{count} entries in {target.dest_path} instead of {expected}")
+        # fingerprints in memory only, never printed
+        want = xmltree.fingerprints_with_history(merged, xmltree.load_binaries(before))
+        got = xmltree.fingerprints_with_history(dest, xmltree.load_binaries(after))
+        if want != got:
+            problems.append(f"content of {target.dest_path} differs from the merge: "
+                            f"{sum((want - got).values())} entries or history versions "
+                            f"missing or modified, {sum((got - want).values())} extra")
+        chain[-2].remove(dest)  # what remains must equal the database before the merge
     except KpmergeError:
         problems.append(f"group {target.dest_path} missing")
-    for path in (target.path_a, target.path_b):
-        try:
-            same = (_canonical(xmltree.find_group(after, path))
-                    == _canonical(xmltree.find_group(before, path)))
-        except KpmergeError:
-            same = False
-        if not same:
-            problems.append(f"group {path} modified")
+    if _canonical(after.find("Root")) != _canonical(before.find("Root")):
+        problems.append(f"database modified outside {target.dest_path} (groups A and B included)")
     if problems:
         raise KpmergeError("Verification failed: " + "; ".join(problems)
                            + f". The original database is in the backup {backup}")
@@ -163,7 +166,10 @@ def _run(args: argparse.Namespace, password_reader: Callable[[str], str],
          confirm: Callable[[str], str]) -> int:
     for warning in harden_process():
         print(f"Warning: {warning}", file=sys.stderr)
-    password = password_reader(f"Password for {args.db}: ").encode("utf-8")
+    try:
+        password = password_reader(f"Password for {args.db}: ").encode("utf-8")
+    except EOFError:
+        raise KpmergeError("No password entered.") from None
     doc = _export(args.db, password)
     target = _resolve(doc, args.group_a, args.group_b, args.dest)
     merged, report = _merge(doc, target)
@@ -171,13 +177,20 @@ def _run(args: argparse.Namespace, password_reader: Callable[[str], str],
     if args.dry_run:
         print("\nDry run: nothing written.")
         return 0
+    print("\nClose or lock the database in KeePassXC before continuing.")
     if not args.yes and not _confirmed(args.db, target, confirm):
         print("Aborted, nothing written.")
         return 0
     backup = _backup(args.db)
     print(f"Backup: {backup}")
     _write(args.db, password, doc, target, merged)
-    _verify(args.db, password, doc, target, report.total_entries, backup)
+    try:
+        _verify(args.db, password, doc, target, merged, report.total_entries, backup)
+    except KeyboardInterrupt:
+        print("\nInterrupted during the final check: the merge was written "
+              f"to {args.db} (group '{target.dest_path}'), but it was not verified. "
+              f"Backup: {backup}", file=sys.stderr)
+        return 130
     print(f"Group created: {target.dest_path}")
     print(f"Delete groups '{target.path_a}' and '{target.path_b}' "
           "by hand once checked.")

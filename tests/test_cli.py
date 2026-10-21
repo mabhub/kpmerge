@@ -209,6 +209,24 @@ class CliIntegrationTest(CliTestBase):
         self.assertIn("Verification failed", err)
         self.assertIn(str(self.backups()[0]), err)
 
+    def test_verification_detects_change_outside_merged_group(self):
+        real_export = cli._export
+        calls = []
+
+        def export_without_archive(db, password):
+            doc = real_export(db, password)
+            calls.append(1)
+            if len(calls) > 1:  # re-export for the verification
+                root = doc.find("Root/Group")
+                root.remove(xmltree.find_group(doc, "Archive"))
+            return doc
+
+        with mock.patch("kpmergelib.cli._export", export_without_archive):
+            code, _, err = self.run_main("Imp A", "Imp B", "--yes")
+        self.assertEqual(code, 1)
+        self.assertIn("database modified outside", err)
+        self.assertIn(str(self.backups()[0]), err)
+
     def test_confirmation_declined(self):
         before = self.digest()
         code, out, err = self.run_main("Imp A", "Imp B", confirm=lambda _: "n")
@@ -217,6 +235,66 @@ class CliIntegrationTest(CliTestBase):
         self.assertIn("Aborted, nothing written.", out)
         self.assert_untouched(before)
 
+
+def _history_doc() -> bytes:
+    versions = [E("Rich", "jdoe", "https://x", password=f"v{n}", mtime=f"2026-01-0{n}T00:00:00Z",
+                  attachments={"old.txt": f"content {n}".encode()}) for n in (1, 2, 3)]
+    return make_doc([
+        G("Imp A", entries=[
+            E("Rich", "jdoe", "https://x", password="a-current", mtime="2026-03-01T00:00:00Z",
+              extra={"otp": "otpauth://totp/x?secret=ABC", "Token": "token-a"},
+              attachments={"key.bin": b"\x00\x01binary"}, history=versions)]),
+        G("Imp B", entries=[
+            E("Rich", "jdoe", "https://x", password="b-current", mtime="2026-02-01T00:00:00Z",
+              extra={"otp": "otpauth://totp/x?secret=DEF"},
+              attachments={"key.bin": b"\x00\x01binary"}, history=versions[:1])]),
+    ], history_max_items=2)
+
+
+@unittest.skipUnless(HAS_CLI, "keepassxc-cli not found")
+class CliHistoryIntegrationTest(CliTestBase):
+    def backups(self) -> list[Path]:
+        return sorted(self.dir.glob("t.kdbx.bak-*"))
+
+    def test_nothing_lost_through_import_and_merge(self):
+        keepass.import_xml(_history_doc(), self.db, PW.encode())
+        before = ET.fromstring(keepass.export_xml(self.db, PW.encode()))
+        target = cli._resolve(before, "Imp A", "Imp B", None)
+        merged, report = cli._merge(before, target)
+        self.assertEqual(len(report.over_limit), 1)  # history beyond the limit
+        want = xmltree.fingerprints_with_history(merged, xmltree.load_binaries(before))
+        self.assertGreaterEqual(sum(want.values()), 5)
+
+        code, out, err = self.run_main("Imp A", "Imp B", "--yes")
+        self.assertEqual(code, 0, err)
+        after = ET.fromstring(keepass.export_xml(self.db, PW.encode()))
+        dest = xmltree.find_group(after, "Imp A (merged)")
+        self.assertEqual(xmltree.fingerprints_with_history(dest, xmltree.load_binaries(after)),
+                         want)
+        for secret in ("a-current", "b-current", "token-a", "ABC", "content 1"):
+            self.assertNotIn(secret, out + err)
+
+    def test_verification_detects_missing_history_version(self):
+        keepass.import_xml(_history_doc(), self.db, PW.encode())
+        real_export = cli._export
+        calls = []
+
+        def export_without_history(db, password):
+            doc = real_export(db, password)
+            calls.append(1)
+            if len(calls) > 1:  # re-export for the verification
+                dest = xmltree.find_group(doc, "Imp A (merged)")
+                for _, entry in xmltree.iter_entries(dest):
+                    hist = entry.find("History")
+                    hist.remove(hist.find("Entry"))
+            return doc
+
+        with mock.patch("kpmergelib.cli._export", export_without_history):
+            code, out, err = self.run_main("Imp A", "Imp B", "--yes")
+        self.assertEqual(code, 1)
+        self.assertIn("Verification failed", err)
+        self.assertIn(str(self.backups()[0]), err)
+        self.assertNotIn("a-current", out + err)
 
 class CliUnitTest(CliTestBase):
     def test_backup_private_from_creation(self):
@@ -269,6 +347,40 @@ class CliUnitTest(CliTestBase):
         self.assertEqual(code, 1)
         self.assertEqual(err.strip(), "internal error: ValueError")
         self.assertNotIn("secret-value", out + err)
+
+    def test_eof_at_password_prompt(self):
+        def eof(_):
+            raise EOFError
+
+        with mock.patch("kpmergelib.cli.harden_process", return_value=[]), \
+                mock.patch("kpmergelib.keepass.export_xml") as export, \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            code = cli.main([str(self.db), "Imp A", "Imp B"], password_reader=eof)
+        self.assertEqual(code, 1)
+        self.assertIn("No password entered.", err.getvalue())
+        self.assertNotIn("internal error", err.getvalue())
+        export.assert_not_called()
+
+    def test_reminder_printed_with_yes_not_with_dry_run(self):
+        reminder = "Close or lock the database in KeePassXC"
+        with mock.patch("kpmergelib.keepass.export_xml", return_value=_doc()), \
+                mock.patch("kpmergelib.cli._backup", return_value=Path("backup.bak")), \
+                mock.patch("kpmergelib.cli._write"), mock.patch("kpmergelib.cli._verify"):
+            _, out, _ = self.run_main("Imp A", "Imp B", "--yes")
+            self.assertIn(reminder, out)
+            _, out, _ = self.run_main("Imp A", "Imp B", "--dry-run")
+            self.assertNotIn(reminder, out)
+
+    def test_interrupt_during_verification(self):
+        with mock.patch("kpmergelib.keepass.export_xml", return_value=_doc()), \
+                mock.patch("kpmergelib.cli._backup", return_value=Path("backup.bak")), \
+                mock.patch("kpmergelib.cli._write"), \
+                mock.patch("kpmergelib.cli._verify", side_effect=KeyboardInterrupt):
+            code, _, err = self.run_main("Imp A", "Imp B", "--yes")
+        self.assertEqual(code, 130)
+        self.assertIn("the merge was written", err)
+        self.assertIn("Imp A (merged)", err)
+        self.assertIn("backup.bak", err)
 
     def test_invalid_arguments(self):
         with contextlib.redirect_stderr(io.StringIO()):
