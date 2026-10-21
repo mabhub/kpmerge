@@ -74,4 +74,20 @@ def format_report(r: Report) -> str:
         lines += ["", "Conflicts:"]
         lines += [f"  {_where(c.path)} / {c.title}: {', '.join(c.fields)} (winner: {c.winner})"
                   for c in r.conflicts]
+    if r.duplicates:
+        lines += ["", "Duplicate keys:"]
+        lines += [f"  {_where(d.path)} / {d.title}: {d.count_a} in A, {d.count_b} in B"
+                  " (copied without merging)" for d in r.duplicates]
+    if r.moved:
+        lines += ["", "Moved entries (matched by fingerprint):"]
+        lines += [f"  {m.title}: {_where(m.path_a)} (A), {_where(m.path_b)} (B)"
+                  f" -> kept in {m.kept}" for m in r.moved]
+    if r.probable:
+        lines += ["", "Probable pairs (to resolve by hand):"]
+        lines += [f"  {p.title}: {_where(p.path_a)} (A), {_where(p.path_b)} (B)"
+                  for p in r.probable]
+    if r.over_limit:
+        lines += ["", "History beyond the database limits (raise them before editing these entries):"]
+        lines += [f"  {_where(o.path)} / {o.title}: {o.history_items} versions"
+                  for o in r.over_limit]
     return "\n".join(lines)
