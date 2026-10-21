@@ -4,11 +4,27 @@ import os
 import sys
 
 # Checked before importing kpmergelib, whose type annotations need Python 3.10.
+# Kept free of f-strings so that older interpreters still reach this message.
 if sys.version_info < (3, 10):
-    sys.exit("Error: kpmerge requires Python 3.10 or later.")
+    sys.exit(
+        "Error: kpmerge requires Python 3.10 or later, but %s is Python %d.%d.\n"
+        "Run it with a newer interpreter, for example: python3.12 -I %s ..."
+        % (sys.executable, sys.version_info[0], sys.version_info[1], sys.argv[0])
+    )
+if not sys.platform.startswith("linux"):
+    sys.exit("Error: kpmerge runs on Linux only (this system is %s)." % sys.platform)
 
-sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, HERE)
 
-import kpmergelib.cli  # noqa: E402
+try:
+    import kpmergelib.cli
+except ModuleNotFoundError as e:
+    if e.name != "kpmergelib":
+        raise
+    sys.exit(
+        "Error: the kpmergelib package was not found next to %s.\n"
+        "Install kpmerge with a symbolic link (ln -s), not a copy." % HERE
+    )
 
 sys.exit(kpmergelib.cli.main())

@@ -6,6 +6,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -402,6 +403,39 @@ class CliUnitTest(CliTestBase):
         r = subprocess.run([str(link), "--help"], capture_output=True, text=True, cwd=self.dir)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("--dry-run", r.stdout)
+
+    def _run_launcher_as(self, attr, value):
+        """Run the launcher under this interpreter with sys.<attr> faked."""
+        code = ("import runpy, sys; sys.%s = %r; sys.argv = ['kpmerge', '--help']; "
+                "runpy.run_path(%r, run_name='__main__')" % (attr, value, str(REPO / "kpmerge")))
+        return subprocess.run([sys.executable, "-I", "-c", code],
+                              capture_output=True, text=True, cwd=self.dir)
+
+    def test_launcher_rejects_old_python(self):
+        r = self._run_launcher_as("version_info", (3, 9, 18))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Error: kpmerge requires Python 3.10 or later", r.stderr)
+        self.assertIn("is Python 3.9", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_launcher_accepts_python_3_10(self):
+        r = self._run_launcher_as("version_info", (3, 10, 0))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("--dry-run", r.stdout)
+
+    def test_launcher_rejects_non_linux(self):
+        r = self._run_launcher_as("platform", "darwin")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Error: kpmerge runs on Linux only (this system is darwin)", r.stderr)
+
+    def test_launcher_copied_without_package(self):
+        copy = self.dir / "kpmerge"
+        shutil.copy(REPO / "kpmerge", copy)
+        r = subprocess.run([sys.executable, "-I", str(copy), "--help"],
+                           capture_output=True, text=True, cwd=self.dir)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("kpmergelib package was not found", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
 
 
 if __name__ == "__main__":
