@@ -42,7 +42,7 @@ Options:
 
 The master password is asked once, without echo. It is passed to `keepassxc-cli` through stdin only.
 
-Before writing, the script reminds you to close or lock the database in KeePassXC, then asks for confirmation (`y` or `yes`). Any other answer aborts without any change.
+Before writing, the script reminds you to close or lock the database in KeePassXC (even with `--yes`), then asks for confirmation (`y` or `yes`). Any other answer aborts without any change.
 
 Exit codes:
 
@@ -58,11 +58,11 @@ Exit codes:
 3. Checks that A and B are distinct, that neither contains the other and that the destination does not exist. Nothing is written if one of these checks fails.
 4. Merges A and B on the XML tree, in memory, and prints the report.
 5. Builds a reduced XML: the original `<Meta>`, the chain of the destination's ancestor groups and the merged group. All groups and entries of the merged group, histories included, get new UUIDs. Otherwise `merge` would recognise the entries of A and B and move them instead of adding copies.
-6. Writes this XML to a `memfd` (an anonymous file in RAM, never present in a file system) and passes it to `keepassxc-cli import` through `/dev/fd/N`. The import creates an encrypted temporary database, with a random password, in a `0700` directory under `/dev/shm`.
-7. Copies the database to `base.kdbx.bak-YYYYMMDD-HHMMSS` (mode `0600`).
+6. Copies the database to `base.kdbx.bak-YYYYMMDD-HHMMSS` (mode `0600`) before any write.
+7. Writes this XML to a `memfd` (an anonymous file in RAM, never present in a file system) and passes it to `keepassxc-cli import` through `/dev/fd/N`. The import creates an encrypted temporary database, with a random password, in a `0700` directory under `/dev/shm`.
 8. Runs `keepassxc-cli merge base.kdbx <temporary database>`.
 9. Deletes the temporary database and directory, including after an error, a Ctrl-C, a `SIGTERM` or a `SIGHUP`. If the directory cannot be deleted, a warning gives its path.
-10. Exports the database again and checks that the merged group exists with the right number of entries, and that A and B are unchanged. On failure, the error gives the path of the backup.
+10. Exports the database again and checks that the merged group exists with the right number of entries, that its entries and their history versions (attachments included) match the computed merge exactly, and that the rest of the database, A and B included, is unchanged. Comparisons use fingerprints in memory, nothing is printed. On failure, the error gives the path of the backup.
 
 ## Merge rules
 
@@ -100,6 +100,7 @@ It is always printed and is the only output of `--dry-run`. It contains no secre
 - The master password appears neither in `argv` nor in the process environment, it goes through stdin.
 - No secret value in the output. An unexpected error only prints the exception name (`internal error: ...`), never a traceback.
 - No core dump: `prctl(PR_SET_DUMPABLE, 0)` and `RLIMIT_CORE = 0`. The process cannot be inspected with `ptrace` by another process of the same user either.
+- `keepassxc-cli` disables its own core dumps. Its `/proc` files belong to root, so `apport` cannot capture it.
 - The Python process is locked in RAM with `mlockall`. If that is not possible, a warning is printed. Locking needs a locked-memory limit of at least 1 GiB (`ulimit -l`, in KiB), while many distributions default to 8 MiB. To raise it, add `<user> - memlock 1048576` to `/etc/security/limits.conf` and log in again.
 - The launcher uses `python3 -I`: no import from the current directory or from `PYTHONPATH`.
 - Groups A and B, and the rest of the database, are never modified or deleted. The final check verifies it.
@@ -113,6 +114,7 @@ It is always printed and is the only output of `--dry-run`. It contains no secre
 - Python cannot wipe its own memory: the master password and the plaintext XML stay in the memory of the process until it exits.
 - These protections target other users and crash dumps, not a malicious program running under your own account. Such a program could replace the launcher or put a fake `keepassxc-cli` first in `PATH`.
 - `/dev/shm` may be swapped out, but it only holds an encrypted database.
+- The `memfd` holding the plaintext XML during the import is also stored in shared memory (shmem), so it may be swapped out like `/dev/shm`. The plaintext XML stays there for the duration of the import, so `/dev/shm` is not the only exposed place. An encrypted or disabled swap removes this risk.
 - Field references `{REF:...}` pointing to a UUID of A or B no longer resolve in the merged copies, because the merged group gets new UUIDs.
 - The history of a merged entry may exceed the database limits (see below). KeePassXC truncates it on the next change to the entry.
 - The script does not modify the database `<Meta>`, so the history limits remain those of the database.
