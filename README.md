@@ -78,7 +78,7 @@ Exit codes:
 - An entry present on one side only is copied as is.
 - Fingerprint matching: an entry moved to another folder with no other change is left alone on each side after key pairing. Lone entries are compared by a SHA-256 fingerprint of their content, across the whole tree of A and B. If the fingerprint is unique on each side, the two entries are merged as identical.
 - The matched entry is placed in the subgroup of the most recent one, or of B on a tie.
-- If a fingerprint appears several times on one side, nothing is merged and the case is reported.
+- If a fingerprint appears several times on one side, nothing is merged and the report lists it under "Identical entries not merged".
 - Duplicate key within a group: no merge for this key. All entries from both sides are copied and the report says so. This is typical of Bitwarden secure notes and cards, which have neither username nor URL.
 - If the destination already exists, the script stops before any write.
 
@@ -90,7 +90,8 @@ It is always printed and is the only output of `--dry-run`. It contains no secre
 - Conflicts: path, title and names of the differing fields (`Password`, `Notes`, `otp`, `attachment:x.pdf`...).
 - Duplicate keys: path, title and number of entries on each side.
 - Moved entries matched by fingerprint: title, subgroup in A, subgroup in B, subgroup kept.
-- Probable pairs: an entry only in A and an entry only in B have the same key, different subgroups and a different content. They were moved and modified. They are not merged, it is up to you to decide.
+- Probable pairs: an entry only in A and an entry only in B share at least two identical, non-empty fields among title, username and URL, and have a different content. They were moved and modified, or renamed, or their URL or username changed. They are not merged, it is up to you to decide. Both titles are shown when they differ.
+- Identical entries not merged: same content in A and in B, but in several copies on at least one side. The report gives the subgroup of each copy.
 - Entries whose history exceeds the database limits.
 
 ## Security guarantees
@@ -122,7 +123,7 @@ It is always printed and is the only output of `--dry-run`. It contains no secre
 ## After the merge
 
 1. Open the database in KeePassXC and check the created group: entries, subgroups, attachments, TOTP.
-2. Handle by hand the probable pairs and duplicate keys of the report.
+2. Handle by hand the probable pairs, identical entries not merged and duplicate keys of the report.
 3. If the report lists entries beyond the history limits, raise them before editing these entries: Database → Database Settings → History, then increase "Maximum history items" and the maximum history size. Otherwise KeePassXC truncates the history on the next change and the losing version disappears.
 4. Delete groups A and B by hand, once everything is checked.
 5. Delete the `base.kdbx.bak-*` backup when everything is fine. It is encrypted, but it still holds the old state.

@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ET
 
 from . import xmltree
 from .errors import KpmergeError
-from .report import Conflict, Duplicate, Moved, OverLimit, Probable, Report
+from .report import Ambiguous, Conflict, Duplicate, Moved, OverLimit, Probable, Report
 
 
 def _history_entries(entry: ET.Element) -> list[ET.Element]:
@@ -164,7 +164,11 @@ def _rescue_by_hash(pending: _Pending, binaries: dict[str, bytes], report: Repor
     index_b = by_fp(pending.lonely_b)
     for fp, items_a in by_fp(pending.lonely_a).items():
         items_b = index_b.get(fp, [])
+        if not items_b:
+            continue
         if len(items_a) != 1 or len(items_b) != 1:
+            report.ambiguous.append(Ambiguous(xmltree.entry_title(items_a[0].entry),
+                                              [x.path for x in items_a], [x.path for x in items_b]))
             continue
         la, lb = items_a[0], items_b[0]
         merged, winner, _ = merge_pair(la.entry, lb.entry, binaries)
@@ -179,11 +183,20 @@ def _rescue_by_hash(pending: _Pending, binaries: dict[str, bytes], report: Repor
         report.moved.append(Moved(xmltree.entry_title(merged), la.path, lb.path, winner))
 
 
-def _find_probable(pending: _Pending, report: Report) -> None:
+def _close_keys(ka: tuple[str, str, str], kb: tuple[str, str, str]) -> bool:
+    """At least two of the three fields (title, username, URL) equal and not empty."""
+    return sum(1 for x, y in zip(ka, kb) if x and x == y) >= 2
+
+
+def _find_probable(pending: _Pending, binaries: dict[str, bytes], report: Report) -> None:
+    """Lone entries with a close key but a different content."""
     for la in pending.lonely_a:
         for lb in pending.lonely_b:
-            if xmltree.entry_key(la.entry) == xmltree.entry_key(lb.entry):
-                report.probable.append(Probable(xmltree.entry_title(la.entry), la.path, lb.path))
+            if (_close_keys(xmltree.entry_key(la.entry), xmltree.entry_key(lb.entry))
+                    and xmltree.fingerprint(la.entry, binaries)
+                    != xmltree.fingerprint(lb.entry, binaries)):
+                report.probable.append(Probable(xmltree.entry_title(la.entry), la.path,
+                                                xmltree.entry_title(lb.entry), lb.path))
 
 
 def _history_size(entry: ET.Element, binaries: dict[str, bytes]) -> int:
@@ -216,7 +229,7 @@ def merge_groups(a: ET.Element, b: ET.Element, binaries: dict[str, bytes],
     pending = _Pending()
     merged = _merge_level(a, b, "", binaries, report, pending)
     _rescue_by_hash(pending, binaries, report)
-    _find_probable(pending, report)
+    _find_probable(pending, binaries, report)
     _check_history(merged, binaries, history_max_items, history_max_size, report)
     report.total_entries = sum(1 for _ in xmltree.iter_entries(merged))
     return merged, report

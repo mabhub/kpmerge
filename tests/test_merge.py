@@ -4,7 +4,8 @@ import xml.etree.ElementTree as ET
 from kpmergelib import xmltree
 from kpmergelib.errors import KpmergeError
 from kpmergelib.merge import merge_groups
-from kpmergelib.report import Conflict, Duplicate, Moved, OverLimit, Probable, format_report
+from kpmergelib.report import (Ambiguous, Conflict, Duplicate, Moved, OverLimit, Probable,
+                               format_report)
 from tests.kpxml import E, G, make_doc
 
 T1, T2, T3, T4, T5 = (f"2026-01-0{i}T00:00:00Z" for i in range(1, 6))
@@ -172,7 +173,7 @@ class DuplicatesAndRescueTest(unittest.TestCase):
         b = G("B", groups=[G("Pro", [E("X", "u", "", "p2", mtime=T2)])])
         *_, merged, report = run(a, b)
         self.assertEqual(len(all_entries(merged)), 2)
-        self.assertEqual(report.probable, [Probable("X", "Personal", "Pro")])
+        self.assertEqual(report.probable, [Probable("X", "Personal", "X", "Pro")])
         self.assertEqual(report.moved, [])
         self.assertEqual((report.only_a, report.only_b), (1, 1))
 
@@ -183,7 +184,34 @@ class DuplicatesAndRescueTest(unittest.TestCase):
         self.assertEqual(len(all_entries(merged)), 3)
         self.assertEqual(report.moved, [])
         self.assertEqual(report.identical, 0)
-        self.assertEqual(len(report.probable), 2)
+        self.assertEqual(report.ambiguous, [Ambiguous("X", ["P1", "P2"], ["Q"])])
+        self.assertEqual(report.probable, [])  # same content: not a probable pair
+        self.assertIn("X: P1, P2 (A), Q (B)", format_report(report))
+
+    def test_repeated_hash_on_one_side_only_not_reported(self):
+        a = G("A", groups=[G("P1", [E("X", "u", "", "pw")]), G("P2", [E("X", "u", "", "pw")])])
+        *_, merged, report = run(a, G("B"))
+        self.assertEqual(report.ambiguous, [])
+
+    def test_renamed_entry_is_probable(self):
+        *_, merged, report = run(G("A", [E("paypal", "u", "https://p", "pw")]),
+                                 G("B", [E("PayPal", "u", "https://p", "pw")]))
+        self.assertEqual(report.probable, [Probable("paypal", "", "PayPal", "")])
+        self.assertIn("paypal: (root) (A) <-> PayPal: (root) (B)", format_report(report))
+
+    def test_changed_url_is_probable(self):
+        *_, merged, report = run(G("A", [E("S", "u", "http://s", "pw")]),
+                                 G("B", [E("S", "u", "https://s", "pw")]))
+        self.assertEqual(report.probable, [Probable("S", "", "S", "")])
+
+    def test_one_common_field_not_probable(self):
+        *_, merged, report = run(G("A", [E("S", "u", "http://a", "pw")]),
+                                 G("B", [E("T", "u", "http://b", "pw")]))
+        self.assertEqual(report.probable, [])
+
+    def test_empty_fields_do_not_pair(self):
+        *_, merged, report = run(G("A", [E("Note 1", notes="x")]), G("B", [E("Note 2", notes="y")]))
+        self.assertEqual(report.probable, [])
 
     def test_duplicate_entries_excluded_from_rescue(self):
         a = G("A", groups=[G("P", [E("N", password="1"), E("N", password="1")])])
