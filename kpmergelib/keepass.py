@@ -44,7 +44,7 @@ def _run(args: list[str], stdin: bytes, pass_fds: tuple[int, ...] = ()) -> bytes
 
 def export_xml(db: Path, password: bytes) -> bytes:
     _check_password(password)
-    return _run(["export", "-q", "-f", "xml", str(db)], password + b"\n")
+    return _run(["export", "-f", "xml", str(db)], password + b"\n")  # no -q: keeps the error message
 
 
 def import_xml(xml: bytes, dest: Path, password: bytes) -> None:

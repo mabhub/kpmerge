@@ -92,6 +92,7 @@ class IntegrationTest(unittest.TestCase):
                 keepass.export_xml(db, b"wrong")
         msg = str(cm.exception)
         self.assertTrue(msg.strip())
+        self.assertNotIn("exit code", msg)  # the reason given by keepassxc-cli is kept
         for line in msg.splitlines():
             self.assertFalse(line.rstrip().endswith(":"), line)
             self.assertNotIn("Saisi", line)  # French keepassxc-cli prompt
