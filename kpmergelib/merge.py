@@ -361,6 +361,18 @@ def _check_history(merged: ET.Element, binaries: dict[str, bytes],
                 OverLimit("/".join(rel), xmltree.entry_title(entry), items))
 
 
+def _check_nothing_lost(a: ET.Element, b: ET.Element, merged: ET.Element,
+                        binaries: dict[str, bytes]) -> None:
+    """Each entry and history version of A and B must be in the result, as an entry or
+    as a history version: a bug of the merge is refused before anything is written."""
+    want = set(xmltree.fingerprints_with_history(a, binaries))
+    want |= set(xmltree.fingerprints_with_history(b, binaries))
+    lost = len(want - set(xmltree.fingerprints_with_history(merged, binaries)))
+    if lost:
+        raise KpmergeError(f"Merge check failed: {lost} entries or history versions of A or B "
+                           "missing from the result. Nothing written; please report this bug.")
+
+
 def merge_groups(a: ET.Element, b: ET.Element, binaries: dict[str, bytes],
                  history_max_items: int, history_max_size: int) -> tuple[ET.Element, Report]:
     """Return a new merged group (attributes of A) and the report.
@@ -380,4 +392,5 @@ def merge_groups(a: ET.Element, b: ET.Element, binaries: dict[str, bytes],
     _archive_missing(merged, pending, _reference_time(b), report)
     _check_history(merged, binaries, history_max_items, history_max_size, report)
     report.total_entries = sum(1 for _ in xmltree.iter_entries(merged))
+    _check_nothing_lost(a, b, merged, binaries)
     return merged, report

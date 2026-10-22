@@ -64,7 +64,7 @@ Exit codes:
 1. Asks for the master password with `getpass`.
 2. Exports the database to XML with `keepassxc-cli export`. The output stays in memory.
 3. Checks that A and B are distinct, that neither contains the other and that the destination does not exist. Nothing is written if one of these checks fails.
-4. Merges A and B on the XML tree, in memory, and prints the report.
+4. Merges A and B on the XML tree, in memory, and prints the report. Before that, it checks by fingerprint that each entry and history version of A and B is in the result, as an entry or a history version. Otherwise it stops with an error, even in a dry run, and writes nothing.
 5. Builds a reduced XML: the original `<Meta>`, the chain of the destination's ancestor groups and the merged group. All groups and entries of the merged group, histories included, get new UUIDs. Otherwise `merge` would recognise the entries of A and B and move them instead of adding copies.
 6. Copies the database to `base.kdbx.bak-YYYYMMDD-HHMMSS` (mode `0600`) before any write.
 7. Writes this XML to a `memfd` (an anonymous file in RAM, never present in a file system) and passes it to `keepassxc-cli import` through `/dev/fd/N`. The import creates an encrypted temporary database, with a random password, in a `0700` directory under `/dev/shm`.

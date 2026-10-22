@@ -1,9 +1,10 @@
 import unittest
 import xml.etree.ElementTree as ET
+from unittest import mock
 
 from kpmergelib import xmltree
 from kpmergelib.errors import KpmergeError
-from kpmergelib.merge import ARCHIVE, merge_groups
+from kpmergelib.merge import ARCHIVE, merge_groups, merge_pair
 from kpmergelib.report import (Ambiguous, Conflict, Duplicate, EntryRef, Moved,
                                OverLimit, Probable, format_report)
 from tests.kpxml import E, G, make_doc
@@ -463,6 +464,30 @@ class DuplicatesAndRescueTest(unittest.TestCase):
             return out
 
         self.assertLessEqual(prints(ga) | prints(gb), prints(merged))
+
+
+
+class NothingLostCheckTest(unittest.TestCase):
+    def test_lost_entry_refused(self):
+        a = G("A", [E("x", "u", mtime=T1)], [G(ARCHIVE, [E("old", "u", "", "s3cr3t")])])
+        with mock.patch("kpmergelib.merge._union_archives", return_value=0):
+            with self.assertRaisesRegex(KpmergeError, "1 entries or history versions") as ctx:
+                run(a, G("B", [E("x", "u", mtime=T1)]))
+        self.assertNotIn("s3cr3t", str(ctx.exception))
+        self.assertNotIn("old", str(ctx.exception))
+
+    def test_lost_history_version_refused(self):
+        a = G("A", [E("x", "u", "", "new", mtime=T2, history=[E("x", "u", "", "v0", mtime=T1)])])
+
+        def drop_history(ea, eb, binaries):
+            merged, winner, fields = merge_pair(ea, eb, binaries)
+            for hist in merged.findall("History"):
+                hist[:] = []
+            return merged, winner, fields
+
+        with mock.patch("kpmergelib.merge.merge_pair", drop_history):
+            with self.assertRaisesRegex(KpmergeError, "missing from the result"):
+                run(a, G("B", [E("x", "u", "", "new", mtime=T2)]))
 
 
 if __name__ == "__main__":
