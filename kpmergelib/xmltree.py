@@ -5,7 +5,7 @@ import hashlib
 import xml.etree.ElementTree as ET
 from collections import Counter
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .errors import KpmergeError
 
@@ -80,12 +80,33 @@ def entry_title(entry: ET.Element) -> str:
     return _strings(entry).get("Title", "")
 
 
-def mtime(element: ET.Element) -> datetime:
-    text = (element.findtext("Times/LastModificationTime") or "").strip()
-    dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+_KDBX4_EPOCH = datetime(1, 1, 1, tzinfo=timezone.utc)
+
+
+def _parse_time(text: str) -> datetime:
+    """ISO 8601, or KDBX 4: base64 of the seconds since 0001-01-01 UTC (int64 little-endian).
+
+    KeePassXC reads both forms, and an export can contain both.
+    """
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        raw = base64.b64decode(text, validate=True)  # binascii.Error is a ValueError
+        if len(raw) != 8:
+            raise ValueError("not a KDBX 4 date") from None
+        return _KDBX4_EPOCH + timedelta(seconds=int.from_bytes(raw, "little", signed=True))
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def mtime(element: ET.Element) -> datetime:
+    text = (element.findtext("Times/LastModificationTime") or "").strip()
+    try:
+        return _parse_time(text)
+    except (ValueError, OverflowError):
+        raise KpmergeError("Unreadable modification date "
+                           f"in entry '{entry_title(element)}'") from None
 
 
 def load_binaries(doc: ET.Element) -> dict[str, bytes]:

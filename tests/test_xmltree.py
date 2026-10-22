@@ -64,6 +64,16 @@ class XmlTreeTest(unittest.TestCase):
         self.assertEqual(entry_key(e), ("T", "u", "x"))
         self.assertEqual(mtime(e).isoformat(), "2026-03-04T05:06:07+00:00")
 
+    def test_mtime_kdbx4_base64(self):
+        # KDBX 4: base64 of the seconds since 0001-01-01 UTC, int64 little-endian
+        doc = parse([G("g", entries=[E("t", mtime="v7Q54Q4AAAA=")])])
+        self.assertEqual(mtime(find_entry(doc, "g", "t")).isoformat(), "2026-03-04T05:06:07+00:00")
+
+    def test_mtime_invalid_raises_kpmerge_error(self):
+        doc = parse([G("g", entries=[E("t", mtime="garbage")])])
+        with self.assertRaisesRegex(KpmergeError, "date"):
+            mtime(find_entry(doc, "g", "t"))
+
     def test_fingerprint_ignores_metadata(self):
         self.assertEqual(fp(E("t", password="p", mtime="2026-01-01T00:00:00Z")),
                          fp(E("t", password="p", mtime="2027-05-05T10:00:00Z")))

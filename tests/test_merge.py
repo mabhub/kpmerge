@@ -39,6 +39,14 @@ class MergeTest(unittest.TestCase):
         self.assertEqual(report.merged, 0)
         self.assertEqual(history(merged.find("Entry")), [])
 
+    def test_conflict_mixed_date_formats(self):
+        # B is dated 2026-01-03 in KDBX 4 base64, A 2026-01-02 in ISO: B wins
+        *_, merged, report = run(
+            G("A", [E("site", "u", "", "old", mtime=T2)]),
+            G("B", [E("site", "u", "", "new", mtime="AFPq4A4AAAA=")]))
+        self.assertEqual(pw(merged.find("Entry")), "new")
+        self.assertEqual(report.conflicts, [Conflict("", "site", ["Password"], "B")])
+
     def test_conflict_newer_b_wins(self):
         doc, ga, gb, merged, report = run(
             G("A", [E("site", "u", "", "old", mtime=T1)]),
