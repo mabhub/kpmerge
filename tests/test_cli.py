@@ -325,6 +325,39 @@ class CliKdbx4IntegrationTest(CliTestBase):
         self.assertEqual(password, "pw-new")  # the most recent (B) wins
 
 
+@unittest.skipUnless(HAS_CLI, "keepassxc-cli not found")
+class CliArchiveIntegrationTest(CliTestBase):
+    def test_second_round_keeps_one_archive(self):
+        archive = "Deleted upstream (archive)"
+        keepass.import_xml(make_doc([
+            G("Imp A", entries=[E("gone", "u", mtime="2026-01-01T00:00:00Z"),
+                                E("x", "u", mtime="2026-01-01T00:00:00Z")]),
+            G("Imp B", entries=[E("x", "u", mtime="2026-02-01T00:00:00Z")]),
+            G("Imp C", entries=[E("x", "u", mtime="2026-03-01T00:00:00Z")]),
+        ]), self.db, PW.encode())
+
+        def titles(doc, path):
+            return [xmltree.entry_title(e) for e in xmltree.find_group(doc, path).findall("Entry")]
+
+        code, out, err = self.run_main("Imp A", "Imp B", "--yes")
+        self.assertEqual(code, 0, err)
+        doc = ET.fromstring(keepass.export_xml(self.db, PW.encode()))
+        self.assertEqual(titles(doc, f"Imp A (merged)/{archive}"), ["gone"])
+        self.assertEqual(titles(doc, "Imp A (merged)"), ["x"])
+        for backup in self.dir.glob("t.kdbx.bak-*"):  # same second: the name would collide
+            backup.unlink()
+
+        code, out, err = self.run_main("Imp A (merged)", "Imp C", "--yes")
+        self.assertEqual(code, 0, err)
+        self.assertIn("0 new, 1 carried over", out)
+        doc = ET.fromstring(keepass.export_xml(self.db, PW.encode()))
+        merged = xmltree.find_group(doc, "Imp A (merged) (merged)")
+        self.assertEqual([g.findtext("Name") for g in merged.findall("Group")], [archive])
+        self.assertEqual(titles(doc, f"Imp A (merged) (merged)/{archive}"), ["gone"])
+        self.assertEqual(xmltree.find_group(doc, f"Imp A (merged) (merged)/{archive}")
+                         .findall("Group"), [])  # no nesting
+
+
 class CliUnitTest(CliTestBase):
     def test_canonical_ignores_custom_data_order(self):
         # keepassxc-cli exports CustomData items in a random order on each run

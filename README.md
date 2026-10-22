@@ -28,6 +28,8 @@ kpmerge [--dry-run] [--dest PATH] [--yes] base.kdbx GROUP_A GROUP_B
 
 Group paths follow the `keepassxc-cli` format: `Imp A`, `Imp A/Subgroup`, separator `/`. The root group's name is optional.
 
+A must be the older export and B the newer one: the entries of A missing from B are archived (see "Entries deleted upstream").
+
 First a dry run. It prints the report and writes nothing:
 
 ```
@@ -81,23 +83,44 @@ Exit codes:
 - Different entries: the one with the most recent `LastModificationTime` wins. The other version is stored in the winner's history.
 - The final history combines those of A and B and the losing version. It is sorted by date, with no duplicate content.
 - Dates are reliable: the KeePassXC Bitwarden importer uses `revisionDate` as the modification date, not the import date.
-- An entry present on one side only is copied as is.
+- An entry present in B only is copied as is. An entry present in A only is archived or kept, see below.
 - Fingerprint matching: an entry moved to another folder with no other change is left alone on each side after key pairing. Lone entries are compared by a SHA-256 fingerprint of their content, across the whole tree of A and B. If the fingerprint is unique on each side, the two entries are merged as identical.
 - The matched entry is placed in the subgroup of the most recent one, or of B on a tie.
 - If a fingerprint appears several times on one side, nothing is merged and the report lists it under "Identical entries not merged".
 - Duplicate key within a group: no merge for this key. All entries from both sides are copied and the report says so. This is typical of Bitwarden secure notes and cards, which have neither username nor URL.
 - If the destination already exists, the script stops before any write.
 
+## Entries deleted upstream
+
+B is taken as a newer export of the same vault. An entry of A still alone after pairing by key and by fingerprint was most likely deleted in the vault between the two exports: Bitwarden exports leave the trash out.
+
+- Such an entry goes to the `Deleted upstream (archive)` subgroup of the merged group, under its original path: `Deleted upstream (archive)/Subfolder/Entry`.
+- Date guard: an entry modified after the most recent modification date of B's entries cannot have been deleted before B was exported. It stays among the live entries and the report lists it.
+- Swapped A and B are only partly caught. The entries added between the two exports are dated after the newest entry of the older export, so the date guard keeps them live. But an added entry that carries an older date, for example restored from the trash or imported with its original dates, is archived, and the entries deleted between the two exports stay live. Check the "Archived" list of the dry-run report.
+- If B holds no entry at all, there is no reference date and nothing is archived.
+- The A side of a probable pair is archived too. The report still lists the pair.
+- A subgroup present in A only, and emptied by the archiving, is removed from the live tree. A subgroup already empty in A stays.
+- Entries with a duplicate key are copied as is, never archived.
+- Like the recycle bin, the archive and its subgroups are left out of search, browser integration and auto-type, and the archive shows the trash icon. To find an archived entry, open the archive group.
+
+The merged group then becomes A of the next merge. Its archive is carried over:
+
+- A `Deleted upstream (archive)` subgroup directly under the root of A or B is not merged like the others. Its content is copied as is into the archive of the result, subfolders united by name, so archives never nest. Its entries are left out of the date guard. Lower in the tree, a group with this name is an ordinary folder.
+- An archived entry whose key (title + username + URL) is back among B's entries, for example restored in the vault, is only reported. Nothing moves. A key made of the title alone, like a Bitwarden note, counts only with the same content.
+
 ## Report
 
 It is always printed and is the only output of `--dry-run`. It contains no secret value and no `UserName`: only titles, group paths and field names. You can paste it into a conversation.
 
-- Counters: identical, merged (with the number of winners on side A and side B), only in A, only in B, duplicate keys, total after merge.
+- Counters: identical, merged (with the number of winners on side A and side B), only in A (kept live), only in B, archived (new and carried over), duplicate keys, total after merge. The total includes the archive.
 - Conflicts: path, title and names of the differing fields (`Password`, `Notes`, `otp`, `attachment:x.pdf`...).
 - Duplicate keys: path, title and number of entries on each side.
 - Moved entries matched by fingerprint: title, subgroup in A, subgroup in B, subgroup kept.
 - Probable pairs: an entry only in A and an entry only in B share at least two identical, non-empty fields among title, username and URL, and have a different content. They were moved and modified, or renamed, or their URL or username changed. They are not merged, it is up to you to decide. Both titles are shown when they differ.
 - Identical entries not merged: same content in A and in B, but in several copies on at least one side. The report gives the subgroup of each copy.
+- Archived entries: original path and title of the entries newly moved to the archive. The carried-over ones are only counted.
+- Entries only in A kept live by the date guard.
+- Archived entries back in B, with their path in the archive.
 - Entries whose history exceeds the database limits.
 
 ## Security guarantees
@@ -129,10 +152,11 @@ It is always printed and is the only output of `--dry-run`. It contains no secre
 ## After the merge
 
 1. Open the database in KeePassXC and check the created group: entries, subgroups, attachments, TOTP.
-2. Handle by hand the probable pairs, identical entries not merged and duplicate keys of the report.
-3. If the report lists entries beyond the history limits, raise them before editing these entries: Database → Database Settings → History, then increase "Maximum history items" and the maximum history size. Otherwise KeePassXC truncates the history on the next change and the losing version disappears.
-4. Delete groups A and B by hand, once everything is checked.
-5. Delete the `base.kdbx.bak-*` backup when everything is fine. It is encrypted, but it still holds the old state.
+2. Handle by hand the probable pairs, identical entries not merged, duplicate keys and archived entries back in B of the report.
+3. Check `Deleted upstream (archive)`. Delete it, or keep it: the next merge carries it over.
+4. If the report lists entries beyond the history limits, raise them before editing these entries: Database → Database Settings → History, then increase "Maximum history items" and the maximum history size. Otherwise KeePassXC truncates the history on the next change and the losing version disappears.
+5. Delete groups A and B by hand, once everything is checked.
+6. Delete the `base.kdbx.bak-*` backup when everything is fine. It is encrypted, but it still holds the old state.
 
 ## Tests
 
