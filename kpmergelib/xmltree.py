@@ -86,7 +86,7 @@ _KDBX4_EPOCH = datetime(1, 1, 1, tzinfo=timezone.utc)
 def _parse_time(text: str) -> datetime:
     """ISO 8601, or KDBX 4: base64 of the seconds since 0001-01-01 UTC (int64 little-endian).
 
-    KeePassXC reads both forms, and an export can contain both.
+    keepassxc-cli exports ISO dates for a KDBX 3.1 database and base64 ones for KDBX 4.
     """
     try:
         dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
