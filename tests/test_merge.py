@@ -4,8 +4,8 @@ import xml.etree.ElementTree as ET
 from kpmergelib import xmltree
 from kpmergelib.errors import KpmergeError
 from kpmergelib.merge import ARCHIVE, merge_groups
-from kpmergelib.report import (Ambiguous, Archived, Conflict, Duplicate, Moved, OverLimit,
-                               Probable, format_report)
+from kpmergelib.report import (Ambiguous, Conflict, Duplicate, EntryRef, Moved,
+                               OverLimit, Probable, format_report)
 from tests.kpxml import E, G, make_doc
 
 T1, T2, T3, T4, T5 = (f"2026-01-0{i}T00:00:00Z" for i in range(1, 6))
@@ -101,7 +101,7 @@ class MergeTest(unittest.TestCase):
         *_, merged, report = run(G("A", [E("a-only", "u")]), G("B", [E("b-only", "u")]))
         self.assertEqual(titles(merged), ["b-only"])
         self.assertEqual(titles(archive(merged)), ["a-only"])
-        self.assertEqual(report.archived, [Archived("", "a-only")])
+        self.assertEqual(report.archived, [EntryRef("", "a-only")])
         self.assertEqual((report.only_a, report.only_b), (0, 1))
         self.assertEqual(report.total_entries, 2)
 
@@ -179,7 +179,7 @@ class ArchiveTest(unittest.TestCase):
         self.assertEqual(titles(arch.find("Group[Name='Sub']")), ["gone2"])
         self.assertEqual(sorted(titles(merged)), ["both", "new"])
         self.assertIsNone(merged.find("Group[Name='Sub']"))  # A-only, emptied by archiving
-        self.assertEqual(report.archived, [Archived("", "gone"), Archived("Sub", "gone2")])
+        self.assertEqual(report.archived, [EntryRef("", "gone"), EntryRef("Sub", "gone2")])
         self.assertEqual((report.only_a, report.only_b, report.total_entries), (0, 1, 4))
         self.assertIn("Archived (missing in B): 2 new, 0 carried over", format_report(report))
         self.assertIn("Sub / gone2", format_report(report))
@@ -188,8 +188,8 @@ class ArchiveTest(unittest.TestCase):
         *_, merged, report = run(G("A", [E("late", "u", mtime=T3), E("same-day", "u", mtime=T2)]),
                                  G("B", [E("x", "u", mtime=T2)]))
         self.assertEqual(titles(merged), ["late", "x"])
-        self.assertEqual(report.kept_newer, [Archived("", "late")])
-        self.assertEqual(report.archived, [Archived("", "same-day")])  # equal date: archived
+        self.assertEqual(report.kept_newer, [EntryRef("", "late")])
+        self.assertEqual(report.archived, [EntryRef("", "same-day")])  # equal date: archived
         self.assertEqual(report.only_a, 1)
         self.assertIn("modified after the newest entry of B", format_report(report))
 
@@ -268,7 +268,7 @@ class ArchiveTest(unittest.TestCase):
         self.assertEqual(sorted(titles(arch)), ["gone", "old1"])
         self.assertEqual(titles(arch.find("Group[Name='Sub']")), ["old2"])
         self.assertIsNone(arch.find(f"Group[Name='{ARCHIVE}']"))  # no nesting
-        self.assertEqual((report.archived, report.carried), ([Archived("", "gone")], 2))
+        self.assertEqual((report.archived, report.carried), ([EntryRef("", "gone")], 2))
         self.assertEqual(report.only_a, 0)  # carried entries are not "only in A"
         self.assertEqual(report.total_entries, 4)
         self.assertIn("1 new, 2 carried over", format_report(report))
@@ -285,14 +285,14 @@ class ArchiveTest(unittest.TestCase):
         a = G("A", [E("gone", "u", mtime=T2)])
         b = G("B", [E("x", "u", mtime=T1)], [G(ARCHIVE, [E("z", "u", mtime=T5)])])
         *_, merged, report = run(a, b)
-        self.assertEqual(report.kept_newer, [Archived("", "gone")])  # T2 > T1; T5 not counted
+        self.assertEqual(report.kept_newer, [EntryRef("", "gone")])  # T2 > T1; T5 not counted
         self.assertEqual(report.carried, 1)
 
     def test_archived_entry_back_in_b_reported(self):
         a = G("A", [E("x", "u", mtime=T1)], [G(ARCHIVE, [E("back", "u", password="p")])])
         b = G("B", [E("x", "u", mtime=T1)], [G("Moved", [E("back", "u", password="other")])])
         *_, merged, report = run(a, b)
-        self.assertEqual(report.back_in_b, [Archived(ARCHIVE, "back")])  # same key, other folder
+        self.assertEqual(report.back_in_b, [EntryRef(ARCHIVE, "back")])  # same key, other folder
         self.assertEqual(titles(archive(merged)), ["back"])  # nothing moved
         self.assertIn("Archived entries back in B", format_report(report))
         self.assertIn(f"{ARCHIVE} / back", format_report(report))
@@ -303,7 +303,7 @@ class ArchiveTest(unittest.TestCase):
         a = G("A", [E("x", "u", mtime=T1)], [old])
         b = G("B", [E("x", "u", mtime=T1), E("Note", password="other"), E("Memo", password="m")])
         *_, merged, report = run(a, b)
-        self.assertEqual(report.back_in_b, [Archived(ARCHIVE, "Memo")])
+        self.assertEqual(report.back_in_b, [EntryRef(ARCHIVE, "Memo")])
 
     def test_archived_entry_with_other_key_not_back(self):
         # a same fingerprint implies a same key: the key alone decides
@@ -322,14 +322,14 @@ class ArchiveTest(unittest.TestCase):
         b = G("B", [E("x", "u", mtime=T1)])
         *_, merged, report = run(a, b)
         self.assertEqual(report.carried, 0)
-        self.assertEqual(report.kept_newer, [Archived(f"Sub/{ARCHIVE}", "e")])
+        self.assertEqual(report.kept_newer, [EntryRef(f"Sub/{ARCHIVE}", "e")])
 
     def test_archive_name_under_unnamed_root_group_is_ordinary(self):
         a = G("A", [E("x", "u", mtime=T1)], [G("", groups=[G(ARCHIVE, [E("e", "u", mtime=T2)])])])
         *_, merged, report = run(a, G("B", [E("x", "u", mtime=T1)]))
         self.assertEqual(sorted(xmltree.entry_title(e) for e in all_entries(merged)), ["e", "x"])
         self.assertEqual(report.carried, 0)
-        self.assertEqual(report.kept_newer, [Archived(f"/{ARCHIVE}", "e")])
+        self.assertEqual(report.kept_newer, [EntryRef(f"/{ARCHIVE}", "e")])
 
 
 class DuplicatesAndRescueTest(unittest.TestCase):

@@ -6,8 +6,8 @@ import xml.etree.ElementTree as ET
 
 from . import xmltree
 from .errors import KpmergeError
-from .report import (Ambiguous, Archived, Conflict, Duplicate, Moved, OverLimit, Probable,
-                     Report)
+from .report import (Ambiguous, Conflict, Duplicate, EntryRef, Moved, OverLimit,
+                     Probable, Report)
 
 # Subgroup of the merged group holding the entries of A missing from B (the newer export)
 ARCHIVE = "Deleted upstream (archive)"
@@ -297,7 +297,7 @@ def _union_archives(groups: list[ET.Element], into: ET.Element) -> int:
 
 
 def _back_in_b(archive: ET.Element, b: ET.Element,
-               binaries: dict[str, bytes]) -> list[Archived]:
+               binaries: dict[str, bytes]) -> list[EntryRef]:
     """Archived entries again among B's entries: same key, or same fingerprint.
 
     A same fingerprint implies a same key, so the key decides, unless it is weak:
@@ -312,7 +312,7 @@ def _back_in_b(archive: ET.Element, b: ET.Element,
             return key in keys
         return xmltree.fingerprint(entry, binaries) in prints
 
-    return [Archived("/".join((ARCHIVE,) + rel), xmltree.entry_title(e))
+    return [EntryRef("/".join((ARCHIVE,) + rel), xmltree.entry_title(e))
             for rel, e in xmltree.iter_entries(archive) if back(e)]
 
 
@@ -328,12 +328,12 @@ def _archive_missing(merged: ET.Element, pending: _Pending, reference: datetime 
     for item in pending.lonely_a:
         title = xmltree.entry_title(item.entry)
         if xmltree.mtime(item.entry) > reference:
-            report.kept_newer.append(Archived(item.path, title))
+            report.kept_newer.append(EntryRef(item.path, title))
             continue
         _archive_path(_archive_root(merged), merged, item.parts).append(item.entry)
         item.group.remove(item.entry)
         touched.add(id(item.group))
-        report.archived.append(Archived(item.path, title))
+        report.archived.append(EntryRef(item.path, title))
         report.only_a -= 1
     for parent, group in pending.a_only_groups:  # a group already empty in A stays
         if id(group) in touched and group.find("Entry") is None and group.find("Group") is None:

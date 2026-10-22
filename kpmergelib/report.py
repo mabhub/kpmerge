@@ -44,8 +44,8 @@ class Ambiguous:
 
 
 @dataclass
-class Archived:
-    """Entry of the archive group, or lone A entry kept live by the date guard."""
+class EntryRef:
+    """An entry designated by its group path and title."""
 
     path: str
     title: str
@@ -60,7 +60,11 @@ class OverLimit:
 
 @dataclass
 class Report:
-    """Paths are relative to the merged group; `""` is its root."""
+    """Paths are relative to the merged group; `""` is its root.
+
+    `archived`: path before the move to the archive. `kept_newer`: path among the live
+    entries. `back_in_b`: path in the archive, which starts with its name.
+    """
 
     identical: int = 0
     merged: int = 0
@@ -72,10 +76,10 @@ class Report:
     probable: list[Probable] = field(default_factory=list)
     ambiguous: list[Ambiguous] = field(default_factory=list)
     over_limit: list[OverLimit] = field(default_factory=list)
-    archived: list[Archived] = field(default_factory=list)
-    kept_newer: list[Archived] = field(default_factory=list)
+    archived: list[EntryRef] = field(default_factory=list)
+    kept_newer: list[EntryRef] = field(default_factory=list)
     carried: int = 0
-    back_in_b: list[Archived] = field(default_factory=list)
+    back_in_b: list[EntryRef] = field(default_factory=list)
     total_entries: int = 0
 
 
