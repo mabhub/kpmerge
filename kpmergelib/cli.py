@@ -1,6 +1,7 @@
 """Command-line interface: arguments, orchestration, backup, verification."""
 import argparse
 import contextlib
+import copy
 import getpass
 import os
 import secrets
@@ -132,6 +133,12 @@ def _write(db: Path, password: bytes, doc: ET.Element, target: Target,
 
 
 def _canonical(group: ET.Element) -> str:
+    """keepassxc-cli exports CustomData items in a random order, and sets `_LAST_MODIFIED`
+    to the time of the export itself: sort the items by key, drop `_LAST_MODIFIED`."""
+    group = copy.deepcopy(group)
+    for data in list(group.iter("CustomData")):
+        data[:] = sorted((item for item in data if item.findtext("Key") != "_LAST_MODIFIED"),
+                         key=lambda item: item.findtext("Key") or "")
     return ET.canonicalize(ET.tostring(group, encoding="unicode"), strip_text=True)
 
 

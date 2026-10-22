@@ -297,7 +297,49 @@ class CliHistoryIntegrationTest(CliTestBase):
         self.assertIn(str(self.backups()[0]), err)
         self.assertNotIn("a-current", out + err)
 
+def _kdbx4_doc() -> bytes:
+    """`_doc()` plus an entry CustomData, a KDBX 4 feature: the import then writes a
+    KDBX 4 file, whose export gives the dates in base64 instead of ISO 8601."""
+    doc = ET.fromstring(_doc())
+    item = ET.SubElement(ET.SubElement(doc.find(".//Entry"), "CustomData"), "Item")
+    ET.SubElement(item, "Key").text = "k"
+    ET.SubElement(item, "Value").text = "v"
+    return ET.tostring(doc)
+
+
+@unittest.skipUnless(HAS_CLI, "keepassxc-cli not found")
+class CliKdbx4IntegrationTest(CliTestBase):
+    def test_end_to_end_with_base64_dates(self):
+        keepass.import_xml(_kdbx4_doc(), self.db, PW.encode())
+        before = ET.fromstring(keepass.export_xml(self.db, PW.encode()))
+        self.assertTrue(before.findtext(".//LastModificationTime").endswith("="))
+        code, out, err = self.run_main("Imp A", "Imp B", "--yes")
+        self.assertEqual(code, 0, err)
+        after = ET.fromstring(keepass.export_xml(self.db, PW.encode()))
+        merged = xmltree.find_group(after, "Imp A (merged)")
+        self.assertEqual(_count(merged), EXPECTED_ENTRIES)
+        common = next(e for _, e in xmltree.iter_entries(merged)
+                      if xmltree.entry_title(e) == "Common")
+        password = next(s.findtext("Value") for s in common.findall("String")
+                        if s.findtext("Key") == "Password")
+        self.assertEqual(password, "new")  # the most recent (B) wins
+
+
 class CliUnitTest(CliTestBase):
+    def test_canonical_ignores_custom_data_order(self):
+        # keepassxc-cli exports CustomData items in a random order on each run
+        # and sets _LAST_MODIFIED to the time of the export itself
+        def root(*items):
+            data = "".join(f"<Item><Key>{k}</Key><Value>{v}</Value></Item>" for k, v in items)
+            return ET.fromstring(f"<Root><Group><Entry><CustomData>{data}</CustomData>"
+                                 "</Entry></Group></Root>")
+        a, b, c = ("a", "1"), ("b", "2"), ("c", "3")
+        self.assertEqual(cli._canonical(root(a, b)), cli._canonical(root(b, a)))
+        self.assertEqual(cli._canonical(root(a, ("_LAST_MODIFIED", "10:00:00"))),
+                         cli._canonical(root(("_LAST_MODIFIED", "10:00:01"), a)))
+        self.assertNotEqual(cli._canonical(root(a, b)), cli._canonical(root(a, c)))
+        self.assertNotEqual(cli._canonical(root(a, b)), cli._canonical(root(a, ("b", "9"))))
+
     def test_backup_private_from_creation(self):
         src = self.dir / "s.kdbx"
         src.write_bytes(b"data")
