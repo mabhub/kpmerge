@@ -231,10 +231,14 @@ def _reference_time(b: ET.Element) -> datetime | None:
     return max((xmltree.mtime(e) for e in _live_entries(b)), default=None)
 
 
+def _subgroup(parent: ET.Element, name: str) -> ET.Element | None:
+    return next((g for g in parent.findall("Group") if _name(g) == name), None)
+
+
 def _archive_root(merged: ET.Element) -> ET.Element:
-    for sub in merged.findall("Group"):
-        if _name(sub) == ARCHIVE:
-            return sub
+    archive = _subgroup(merged, ARCHIVE)
+    if archive is not None:
+        return archive
     archive = _bare_copy(merged)
     archive.find("Name").text = ARCHIVE
     for icon in archive.findall("CustomIconUUID"):  # would hide the trash icon
@@ -250,30 +254,30 @@ def _archive_root(merged: ET.Element) -> ET.Element:
     return archive
 
 
-def _archive_copy(group: ET.Element) -> ET.Element:
-    """Bare copy of `group` for the archive: search and auto-type inherited from its root.
+def _archive_child(parent: ET.Element, template: ET.Element) -> ET.Element:
+    """Subgroup of `parent` named like `template`, else a bare copy of `template` added.
 
-    An explicit `true` copied from a live group would offer its deleted entries again.
+    The copy inherits search and auto-type from the archive root: an explicit `true`
+    copied from a live group would offer its deleted entries again.
     """
-    out = _bare_copy(group)
+    found = _subgroup(parent, _name(template))
+    if found is not None:
+        return found
+    sub = _bare_copy(template)
     for tag in ("EnableSearching", "EnableAutoType"):
-        node = out.find(tag)
+        node = sub.find(tag)
         if node is not None:
             node.text = "null"
-    return out
+    parent.append(sub)
+    return sub
 
 
 def _archive_path(archive: ET.Element, live: ET.Element, parts: tuple[str, ...]) -> ET.Element:
     """Subgroup `parts` of the archive, created from the live groups at the same place."""
     node = archive
     for part in parts:
-        live = next(g for g in live.findall("Group") if _name(g) == part)
-        found = [g for g in node.findall("Group") if _name(g) == part]
-        if found:
-            node = found[0]
-        else:
-            node.append(_archive_copy(live))
-            node = node.findall("Group")[-1]
+        live = _subgroup(live, part)
+        node = _archive_child(node, live)
     return node
 
 
@@ -288,11 +292,7 @@ def _union_archives(groups: list[ET.Element], into: ET.Element) -> int:
             into.append(copy.deepcopy(entry))
             count += 1
         for sub in group.findall("Group"):
-            found = [g for g in into.findall("Group") if _name(g) == _name(sub)]
-            if not found:
-                into.append(_archive_copy(sub))
-                found = into.findall("Group")[-1:]
-            count += _union_archives([sub], found[0])
+            count += _union_archives([sub], _archive_child(into, sub))
     return count
 
 
