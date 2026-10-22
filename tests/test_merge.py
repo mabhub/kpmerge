@@ -133,13 +133,14 @@ class MergeTest(unittest.TestCase):
 
     def test_inputs_untouched_by_archiving(self):
         a = G("A", [E("gone", "u", mtime=T1), E("x", "u", mtime=T1)],
-              [G("Sub", [E("gone2", "u", mtime=T1)])])
-        b = G("B", [E("x", "u", mtime=T2)])
+              [G("Sub", [E("gone2", "u", mtime=T1)]), G(ARCHIVE, [E("old", "u", mtime=T1)])])
+        b = G("B", [E("x", "u", mtime=T2)],
+              [G(ARCHIVE, [E("old-b", "u", mtime=T1)], [G("S", [E("old-s", "u", mtime=T1)])])])
         doc = ET.fromstring(make_doc([a, b]))
         ga, gb = xmltree.find_group(doc, "A"), xmltree.find_group(doc, "B")
         before = canon(ga), canon(gb)
         _, report = merge_groups(ga, gb, xmltree.load_binaries(doc), 10, 6291456)
-        self.assertEqual(len(report.archived), 2)
+        self.assertEqual((len(report.archived), report.carried), (2, 3))
         self.assertEqual((canon(ga), canon(gb)), before)
 
     def test_no_user_or_secret_in_report(self):
@@ -221,6 +222,73 @@ class ArchiveTest(unittest.TestCase):
         *_, merged, _ = run(a, b)
         self.assertEqual(titles(merged.find("Group[Name='Sub']")), ["kept"])
         self.assertEqual(titles(archive(merged).find("Group[Name='Sub']")), ["gone"])
+
+
+    def test_previous_archive_carried_over(self):
+        old = G(ARCHIVE, [E("old1", "u", mtime=T1)], [G("Sub", [E("old2", "u", mtime=T1)])])
+        a = G("A", [E("gone", "u", mtime=T1), E("x", "u", mtime=T1)], [old])
+        b = G("B", [E("x", "u", mtime=T2)])
+        *_, merged, report = run(a, b)
+        arch = archive(merged)
+        self.assertEqual(len(merged.findall(f"Group[Name='{ARCHIVE}']")), 1)
+        self.assertEqual(sorted(titles(arch)), ["gone", "old1"])
+        self.assertEqual(titles(arch.find("Group[Name='Sub']")), ["old2"])
+        self.assertIsNone(arch.find(f"Group[Name='{ARCHIVE}']"))  # no nesting
+        self.assertEqual((report.archived, report.carried), ([Archived("", "gone")], 2))
+        self.assertEqual(report.only_a, 0)  # carried entries are not "only in A"
+        self.assertEqual(report.total_entries, 4)
+        self.assertIn("1 new, 2 carried over", format_report(report))
+
+    def test_archives_of_both_sides_unioned(self):
+        a = G("A", [E("x", "u", mtime=T2)], [G(ARCHIVE, groups=[G("S", [E("p", "u")])])])
+        b = G("B", [E("x", "u", mtime=T2)], [G(ARCHIVE, groups=[G("S", [E("q", "u")])])])
+        *_, merged, report = run(a, b)
+        self.assertEqual(sorted(titles(archive(merged).find("Group[Name='S']"))), ["p", "q"])
+        self.assertEqual(report.carried, 2)
+        self.assertEqual((report.only_a, report.only_b, report.identical), (0, 0, 1))
+
+    def test_archive_ignored_by_reference_date(self):
+        a = G("A", [E("gone", "u", mtime=T2)])
+        b = G("B", [E("x", "u", mtime=T1)], [G(ARCHIVE, [E("z", "u", mtime=T5)])])
+        *_, merged, report = run(a, b)
+        self.assertEqual(report.kept_newer, [Archived("", "gone")])  # T2 > T1; T5 not counted
+        self.assertEqual(report.carried, 1)
+
+    def test_archived_entry_back_in_b_reported(self):
+        a = G("A", [E("x", "u", mtime=T1)], [G(ARCHIVE, [E("back", "u", password="p")])])
+        b = G("B", [E("x", "u", mtime=T1)], [G("Moved", [E("back", "u", password="other")])])
+        *_, merged, report = run(a, b)
+        self.assertEqual(report.back_in_b, [Archived(ARCHIVE, "back")])  # same key, other folder
+        self.assertEqual(titles(archive(merged)), ["back"])  # nothing moved
+        self.assertIn("Archived entries back in B", format_report(report))
+        self.assertIn(f"{ARCHIVE} / back", format_report(report))
+
+    def test_archived_note_back_in_b_only_with_same_content(self):
+        # a title alone (Bitwarden note) is too weak a key: the content must match too
+        old = G(ARCHIVE, [E("Note", password="p"), E("Memo", password="m")])
+        a = G("A", [E("x", "u", mtime=T1)], [old])
+        b = G("B", [E("x", "u", mtime=T1), E("Note", password="other"), E("Memo", password="m")])
+        *_, merged, report = run(a, b)
+        self.assertEqual(report.back_in_b, [Archived(ARCHIVE, "Memo")])
+
+    def test_archived_entry_with_other_key_not_back(self):
+        # a same fingerprint implies a same key: the key alone decides
+        a = G("A", [E("x", "u", mtime=T1)],
+              [G(ARCHIVE, groups=[G("S", [E("old name", "u", password="p")])])])
+        b = G("B", [E("x", "u", mtime=T1), E("new name", "u", password="p")])
+        *_, merged, report = run(a, b)
+        self.assertEqual(report.back_in_b, [])
+
+    def test_two_archives_at_root_rejected(self):
+        with self.assertRaisesRegex(KpmergeError, "Same-name sibling subgroups"):
+            run(G("A", groups=[G(ARCHIVE), G(ARCHIVE)]), G("B"))
+
+    def test_archive_name_below_root_is_ordinary(self):
+        a = G("A", groups=[G("Sub", groups=[G(ARCHIVE, [E("e", "u", mtime=T2)])])])
+        b = G("B", [E("x", "u", mtime=T1)])
+        *_, merged, report = run(a, b)
+        self.assertEqual(report.carried, 0)
+        self.assertEqual(report.kept_newer, [Archived(f"Sub/{ARCHIVE}", "e")])
 
 
 class DuplicatesAndRescueTest(unittest.TestCase):

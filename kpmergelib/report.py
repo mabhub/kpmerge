@@ -75,6 +75,7 @@ class Report:
     archived: list[Archived] = field(default_factory=list)
     kept_newer: list[Archived] = field(default_factory=list)
     carried: int = 0
+    back_in_b: list[Archived] = field(default_factory=list)
     total_entries: int = 0
 
 
@@ -118,6 +119,9 @@ def format_report(r: Report) -> str:
     if r.kept_newer:
         lines += ["", "Only in A but modified after the newest entry of B (kept):"]
         lines += [f"  {_where(x.path)} / {x.title}" for x in r.kept_newer]
+    if r.back_in_b:
+        lines += ["", "Archived entries back in B (delete the archived copy by hand once checked):"]
+        lines += [f"  {_where(x.path)} / {x.title}" for x in r.back_in_b]
     if r.ambiguous:
         lines += ["", "Identical entries not merged (several copies on one side):"]
         lines += [f"  {x.title}: {', '.join(map(_where, x.paths_a))} (A),"

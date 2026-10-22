@@ -154,6 +154,8 @@ def _merge_level(a: ET.Element | None, b: ET.Element | None, path: str,
                     f"Same-name sibling subgroups in {side}: {_join(path, _name(g))} "
                     "- rename them in KeePassXC before merging.")
             subs[_name(g)] = g
+        if not path:  # a previous archive is carried over by merge_groups, not merged
+            subs.pop(ARCHIVE, None)
     names = list(subs_a) + [n for n in subs_b if n not in subs_a]
     for name in names:
         sub = _merge_level(subs_a.get(name), subs_b.get(name), _join(path, name),
@@ -251,6 +253,45 @@ def _archive_path(archive: ET.Element, live: ET.Element, path: str) -> ET.Elemen
     return node
 
 
+def _union_archives(groups: list[ET.Element], into: ET.Element) -> int:
+    """Copy the archives' entries as is into `into`, subgroups unioned by name.
+
+    Returns the number of entries copied.
+    """
+    count = 0
+    for group in groups:
+        for entry in group.findall("Entry"):
+            into.append(copy.deepcopy(entry))
+            count += 1
+        for sub in group.findall("Group"):
+            found = [g for g in into.findall("Group") if _name(g) == _name(sub)]
+            if not found:
+                into.append(_bare_copy(sub))
+                found = into.findall("Group")[-1:]
+            count += _union_archives([sub], found[0])
+    return count
+
+
+def _back_in_b(archive: ET.Element, b: ET.Element,
+               binaries: dict[str, bytes]) -> list[Archived]:
+    """Archived entries again among B's entries: same key, or same fingerprint.
+
+    A same fingerprint implies a same key, so the key decides, unless it is weak:
+    a title alone (a Bitwarden note) must come with the same content.
+    """
+    keys = {xmltree.entry_key(e) for e in _live_entries(b)}
+    prints = {xmltree.fingerprint(e, binaries) for e in _live_entries(b)}
+
+    def back(entry: ET.Element) -> bool:
+        key = xmltree.entry_key(entry)
+        if sum(1 for x in key if x) >= 2:
+            return key in keys
+        return xmltree.fingerprint(entry, binaries) in prints
+
+    return [Archived("/".join((ARCHIVE,) + rel), xmltree.entry_title(e))
+            for rel, e in xmltree.iter_entries(archive) if back(e)]
+
+
 def _archive_missing(merged: ET.Element, pending: _Pending, reference: datetime | None,
                      report: Report) -> None:
     """Move the lone A entries, older than B, to the archive group.
@@ -307,6 +348,11 @@ def merge_groups(a: ET.Element, b: ET.Element, binaries: dict[str, bytes],
     merged = _merge_level(a, b, "", binaries, report, pending)
     _rescue_by_hash(pending, binaries, report)
     _find_probable(pending, binaries, report)
+    previous = [g for side in (a, b) for g in side.findall("Group") if _name(g) == ARCHIVE]
+    if previous:
+        archive = _archive_root(merged)
+        report.carried = _union_archives(previous, archive)
+        report.back_in_b = _back_in_b(archive, b, binaries)
     _archive_missing(merged, pending, _reference_time(b), report)
     _check_history(merged, binaries, history_max_items, history_max_size, report)
     report.total_entries = sum(1 for _ in xmltree.iter_entries(merged))
