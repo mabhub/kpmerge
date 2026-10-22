@@ -79,8 +79,12 @@ class _Lonely:
     """Entry left alone after key pairing (its copy already placed in `group`)."""
 
     entry: ET.Element
-    path: str
     group: ET.Element
+    parts: tuple[str, ...]  # group names, not a path: a name may itself contain "/"
+
+    @property
+    def path(self) -> str:
+        return "/".join(self.parts)
 
 
 @dataclass
@@ -95,9 +99,10 @@ def _join(path: str, name: str) -> str:
     return f"{path}/{name}" if path else name
 
 
-def _merge_level(a: ET.Element | None, b: ET.Element | None, path: str,
+def _merge_level(a: ET.Element | None, b: ET.Element | None, parts: tuple[str, ...],
                  binaries: dict[str, bytes], report: Report, pending: _Pending) -> ET.Element:
-    """Merge level `path`; `a` or `b` is None when the group exists on one side only."""
+    """Merge level `parts`; `a` or `b` is None when the group exists on one side only."""
+    path = "/".join(parts)
     out = _bare_copy(a if a is not None else b)
     entries_a = a.findall("Entry") if a is not None else []
     entries_b = b.findall("Entry") if b is not None else []
@@ -139,7 +144,7 @@ def _merge_level(a: ET.Element | None, b: ET.Element | None, path: str,
             copy_ = copy.deepcopy(e)
             out.append(copy_)
             if not duplicated(key):  # duplicate key: copied as is, no fingerprint matching
-                lonely.append(_Lonely(copy_, path, out))
+                lonely.append(_Lonely(copy_, out, parts))
                 if side == "A":
                     report.only_a += 1
                 else:
@@ -154,11 +159,12 @@ def _merge_level(a: ET.Element | None, b: ET.Element | None, path: str,
                     f"Same-name sibling subgroups in {side}: {_join(path, _name(g))} "
                     "- rename them in KeePassXC before merging.")
             subs[_name(g)] = g
-        if not path:  # a previous archive is carried over by merge_groups, not merged
+        # `parts`, not `path`: a root subgroup may be unnamed
+        if not parts:  # a previous archive is carried over by merge_groups, not merged
             subs.pop(ARCHIVE, None)
     names = list(subs_a) + [n for n in subs_b if n not in subs_a]
     for name in names:
-        sub = _merge_level(subs_a.get(name), subs_b.get(name), _join(path, name),
+        sub = _merge_level(subs_a.get(name), subs_b.get(name), parts + (name,),
                            binaries, report, pending)
         out.append(sub)
         if name not in subs_b:
@@ -231,24 +237,42 @@ def _archive_root(merged: ET.Element) -> ET.Element:
             return sub
     archive = _bare_copy(merged)
     archive.find("Name").text = ARCHIVE
-    for tag, text in (("Notes", ""), ("IconID", _TRASH_ICON)):
+    for icon in archive.findall("CustomIconUUID"):  # would hide the trash icon
+        archive.remove(icon)
+    # like the recycle bin: deleted secrets are not offered by search, browser or auto-type
+    for tag, text in (("Notes", ""), ("IconID", _TRASH_ICON),
+                      ("EnableSearching", "false"), ("EnableAutoType", "false")):
         node = archive.find(tag)
-        if node is not None:
-            node.text = text
+        if node is None:
+            node = ET.SubElement(archive, tag)
+        node.text = text
     merged.append(archive)
     return archive
 
 
-def _archive_path(archive: ET.Element, live: ET.Element, path: str) -> ET.Element:
-    """Subgroup `path` of the archive, created from the live groups at the same path."""
+def _archive_copy(group: ET.Element) -> ET.Element:
+    """Bare copy of `group` for the archive: search and auto-type inherited from its root.
+
+    An explicit `true` copied from a live group would offer its deleted entries again.
+    """
+    out = _bare_copy(group)
+    for tag in ("EnableSearching", "EnableAutoType"):
+        node = out.find(tag)
+        if node is not None:
+            node.text = "null"
+    return out
+
+
+def _archive_path(archive: ET.Element, live: ET.Element, parts: tuple[str, ...]) -> ET.Element:
+    """Subgroup `parts` of the archive, created from the live groups at the same place."""
     node = archive
-    for part in path.split("/") if path else []:
+    for part in parts:
         live = next(g for g in live.findall("Group") if _name(g) == part)
         found = [g for g in node.findall("Group") if _name(g) == part]
         if found:
             node = found[0]
         else:
-            node.append(_bare_copy(live))
+            node.append(_archive_copy(live))
             node = node.findall("Group")[-1]
     return node
 
@@ -266,7 +290,7 @@ def _union_archives(groups: list[ET.Element], into: ET.Element) -> int:
         for sub in group.findall("Group"):
             found = [g for g in into.findall("Group") if _name(g) == _name(sub)]
             if not found:
-                into.append(_bare_copy(sub))
+                into.append(_archive_copy(sub))
                 found = into.findall("Group")[-1:]
             count += _union_archives([sub], found[0])
     return count
@@ -306,7 +330,7 @@ def _archive_missing(merged: ET.Element, pending: _Pending, reference: datetime 
         if xmltree.mtime(item.entry) > reference:
             report.kept_newer.append(Archived(item.path, title))
             continue
-        _archive_path(_archive_root(merged), merged, item.path).append(item.entry)
+        _archive_path(_archive_root(merged), merged, item.parts).append(item.entry)
         item.group.remove(item.entry)
         touched.add(id(item.group))
         report.archived.append(Archived(item.path, title))
@@ -345,7 +369,7 @@ def merge_groups(a: ET.Element, b: ET.Element, binaries: dict[str, bytes],
     """
     report = Report()
     pending = _Pending()
-    merged = _merge_level(a, b, "", binaries, report, pending)
+    merged = _merge_level(a, b, (), binaries, report, pending)
     _rescue_by_hash(pending, binaries, report)
     _find_probable(pending, binaries, report)
     previous = [g for side in (a, b) for g in side.findall("Group") if _name(g) == ARCHIVE]

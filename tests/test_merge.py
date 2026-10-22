@@ -224,6 +224,40 @@ class ArchiveTest(unittest.TestCase):
         self.assertEqual(titles(archive(merged).find("Group[Name='Sub']")), ["gone"])
 
 
+    def test_group_name_with_slash_archived(self):
+        a = G("A", groups=[G("a/b", [E("gone", "u", mtime=T1)]),
+                           G("a", groups=[G("b", [E("other", "u", mtime=T1)])])])
+        *_, merged, report = run(a, G("B", [E("x", "u", mtime=T2)]))
+        arch = archive(merged)
+        self.assertEqual(titles(arch.find("Group[Name='a/b']")), ["gone"])
+        self.assertEqual(titles(arch.find("Group[Name='a']/Group[Name='b']")), ["other"])
+
+    def test_archive_root_hidden_from_search_and_auto_type(self):
+        doc = ET.fromstring(make_doc([G("A", [E("gone", "u", mtime=T1)]),
+                                      G("B", [E("x", "u", mtime=T2)])]))
+        ga, gb = xmltree.find_group(doc, "A"), xmltree.find_group(doc, "B")
+        ET.SubElement(ga, "CustomIconUUID").text = "AAAAAAAAAAAAAAAAAAAAAQ=="
+        merged, _ = merge_groups(ga, gb, xmltree.load_binaries(doc), 10, 6291456)
+        arch = archive(merged)
+        self.assertEqual((arch.findtext("IconID"), arch.find("CustomIconUUID")), ("43", None))
+        self.assertEqual((arch.findtext("EnableSearching"), arch.findtext("EnableAutoType")),
+                         ("false", "false"))
+
+    def test_archive_subgroups_inherit_search_and_auto_type(self):
+        a = G("A", groups=[G("Sub", [E("gone", "u", mtime=T1)]),
+                           G(ARCHIVE, groups=[G("Old", [E("old", "u", mtime=T1)])])])
+        doc = ET.fromstring(make_doc([a, G("B", [E("x", "u", mtime=T2)])]))
+        ga, gb = xmltree.find_group(doc, "A"), xmltree.find_group(doc, "B")
+        for group in (ga.find("Group[Name='Sub']"), ga.find(f"Group[Name='{ARCHIVE}']/Group")):
+            for tag in ("EnableSearching", "EnableAutoType"):
+                group.find(tag).text = "true"
+        merged, _ = merge_groups(ga, gb, xmltree.load_binaries(doc), 10, 6291456)
+        for name in ("Sub", "Old"):
+            with self.subTest(name=name):
+                sub = archive(merged).find(f"Group[Name='{name}']")
+                self.assertEqual((sub.findtext("EnableSearching"), sub.findtext("EnableAutoType")),
+                                 ("null", "null"))
+
     def test_previous_archive_carried_over(self):
         old = G(ARCHIVE, [E("old1", "u", mtime=T1)], [G("Sub", [E("old2", "u", mtime=T1)])])
         a = G("A", [E("gone", "u", mtime=T1), E("x", "u", mtime=T1)], [old])
@@ -289,6 +323,13 @@ class ArchiveTest(unittest.TestCase):
         *_, merged, report = run(a, b)
         self.assertEqual(report.carried, 0)
         self.assertEqual(report.kept_newer, [Archived(f"Sub/{ARCHIVE}", "e")])
+
+    def test_archive_name_under_unnamed_root_group_is_ordinary(self):
+        a = G("A", [E("x", "u", mtime=T1)], [G("", groups=[G(ARCHIVE, [E("e", "u", mtime=T2)])])])
+        *_, merged, report = run(a, G("B", [E("x", "u", mtime=T1)]))
+        self.assertEqual(sorted(xmltree.entry_title(e) for e in all_entries(merged)), ["e", "x"])
+        self.assertEqual(report.carried, 0)
+        self.assertEqual(report.kept_newer, [Archived(f"/{ARCHIVE}", "e")])
 
 
 class DuplicatesAndRescueTest(unittest.TestCase):
