@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 
 from kpmergelib import xmltree
 from kpmergelib.errors import KpmergeError
-from kpmergelib.merge import merge_groups
-from kpmergelib.report import (Ambiguous, Conflict, Duplicate, Moved, OverLimit, Probable,
-                               format_report)
+from kpmergelib.merge import ARCHIVE, merge_groups
+from kpmergelib.report import (Ambiguous, Archived, Conflict, Duplicate, Moved, OverLimit,
+                               Probable, format_report)
 from tests.kpxml import E, G, make_doc
 
 T1, T2, T3, T4, T5 = (f"2026-01-0{i}T00:00:00Z" for i in range(1, 6))
@@ -28,6 +28,14 @@ def history(entry: ET.Element) -> list[ET.Element]:
 
 def canon(el: ET.Element) -> str:
     return ET.canonicalize(ET.tostring(el, encoding="unicode"), strip_text=True)
+
+
+def archive(merged: ET.Element) -> ET.Element:
+    return next(g for g in merged.findall("Group") if g.findtext("Name") == ARCHIVE)
+
+
+def titles(group: ET.Element) -> list[str]:
+    return [xmltree.entry_title(e) for e in group.findall("Entry")]
 
 
 class MergeTest(unittest.TestCase):
@@ -91,9 +99,10 @@ class MergeTest(unittest.TestCase):
 
     def test_only_one_side(self):
         *_, merged, report = run(G("A", [E("a-only", "u")]), G("B", [E("b-only", "u")]))
-        titles = {xmltree.entry_title(e) for e in merged.findall("Entry")}
-        self.assertEqual(titles, {"a-only", "b-only"})
-        self.assertEqual((report.only_a, report.only_b), (1, 1))
+        self.assertEqual(titles(merged), ["b-only"])
+        self.assertEqual(titles(archive(merged)), ["a-only"])
+        self.assertEqual(report.archived, [Archived("", "a-only")])
+        self.assertEqual((report.only_a, report.only_b), (0, 1))
         self.assertEqual(report.total_entries, 2)
 
     def test_subgroups_matched_by_name(self):
@@ -102,7 +111,7 @@ class MergeTest(unittest.TestCase):
                         G("Empty")])
         doc, ga, gb, merged, report = run(a, b)
         names = [g.findtext("Name") for g in merged.findall("Group")]
-        self.assertEqual(sorted(names), ["Empty", "New", "Sub"])
+        self.assertEqual(sorted(names), [ARCHIVE, "Empty", "New", "Sub"])
         self.assertEqual(merged.findtext("Name"), "A")
         self.assertEqual(report.conflicts[0].path, "Sub")
         sub_group = next(g for g in merged.findall("Group") if g.findtext("Name") == "Sub")
@@ -120,6 +129,17 @@ class MergeTest(unittest.TestCase):
         ga, gb = xmltree.find_group(doc, "A"), xmltree.find_group(doc, "B")
         before = canon(ga), canon(gb)
         merge_groups(ga, gb, xmltree.load_binaries(doc), 10, 6291456)
+        self.assertEqual((canon(ga), canon(gb)), before)
+
+    def test_inputs_untouched_by_archiving(self):
+        a = G("A", [E("gone", "u", mtime=T1), E("x", "u", mtime=T1)],
+              [G("Sub", [E("gone2", "u", mtime=T1)])])
+        b = G("B", [E("x", "u", mtime=T2)])
+        doc = ET.fromstring(make_doc([a, b]))
+        ga, gb = xmltree.find_group(doc, "A"), xmltree.find_group(doc, "B")
+        before = canon(ga), canon(gb)
+        _, report = merge_groups(ga, gb, xmltree.load_binaries(doc), 10, 6291456)
+        self.assertEqual(len(report.archived), 2)
         self.assertEqual((canon(ga), canon(gb)), before)
 
     def test_no_user_or_secret_in_report(self):
@@ -145,6 +165,62 @@ class MergeTest(unittest.TestCase):
 
 def all_entries(group: ET.Element):
     return [e for _, e in xmltree.iter_entries(group)]
+
+
+class ArchiveTest(unittest.TestCase):
+    def test_missing_in_b_archived(self):
+        a = G("A", [E("gone", "u", mtime=T1), E("both", "u", mtime=T1)],
+              [G("Sub", [E("gone2", "u", mtime=T1)])])
+        b = G("B", [E("both", "u", mtime=T2), E("new", "u", mtime=T2)])
+        *_, merged, report = run(a, b)
+        arch = archive(merged)
+        self.assertEqual(titles(arch), ["gone"])
+        self.assertEqual(titles(arch.find("Group[Name='Sub']")), ["gone2"])
+        self.assertEqual(sorted(titles(merged)), ["both", "new"])
+        self.assertIsNone(merged.find("Group[Name='Sub']"))  # A-only, emptied by archiving
+        self.assertEqual(report.archived, [Archived("", "gone"), Archived("Sub", "gone2")])
+        self.assertEqual((report.only_a, report.only_b, report.total_entries), (0, 1, 4))
+        self.assertIn("Archived (missing in B): 2 new, 0 carried over", format_report(report))
+        self.assertIn("Sub / gone2", format_report(report))
+
+    def test_modified_after_b_kept_live(self):
+        *_, merged, report = run(G("A", [E("late", "u", mtime=T3), E("same-day", "u", mtime=T2)]),
+                                 G("B", [E("x", "u", mtime=T2)]))
+        self.assertEqual(titles(merged), ["late", "x"])
+        self.assertEqual(report.kept_newer, [Archived("", "late")])
+        self.assertEqual(report.archived, [Archived("", "same-day")])  # equal date: archived
+        self.assertEqual(report.only_a, 1)
+        self.assertIn("modified after the newest entry of B", format_report(report))
+
+    def test_b_without_entries_archives_nothing(self):
+        *_, merged, report = run(G("A", [E("a", "u")]), G("B", groups=[G("Empty")]))
+        self.assertEqual(report.archived, [])
+        self.assertIsNone(merged.find(f"Group[Name='{ARCHIVE}']"))
+        self.assertEqual(report.only_a, 1)
+
+    def test_group_empty_in_a_kept(self):
+        *_, merged, _ = run(G("A", [E("gone", "u", mtime=T1)], [G("Empty")]),
+                            G("B", [E("x", "u", mtime=T2)]))
+        self.assertIsNotNone(merged.find("Group[Name='Empty']"))
+
+    def test_nested_groups_emptied_by_archiving_removed(self):
+        a = G("A", groups=[G("P", groups=[G("Q", [E("gone", "u", mtime=T1)])]),
+                           G("K", [E("late", "u", mtime=T3)],
+                             [G("L", [E("gone2", "u", mtime=T1)])])])
+        *_, merged, _ = run(a, G("B", [E("x", "u", mtime=T2)]))
+        self.assertIsNone(merged.find("Group[Name='P']"))  # emptied through its only child
+        self.assertEqual(titles(merged.find("Group[Name='K']")), ["late"])
+        self.assertIsNone(merged.find("Group[Name='K']/Group[Name='L']"))
+        arch = archive(merged)
+        self.assertEqual(titles(arch.find("Group[Name='P']/Group[Name='Q']")), ["gone"])
+        self.assertEqual(titles(arch.find("Group[Name='K']/Group[Name='L']")), ["gone2"])
+
+    def test_archive_keeps_shared_group_live(self):
+        a = G("A", groups=[G("Sub", [E("gone", "u", mtime=T1)])])
+        b = G("B", groups=[G("Sub", [E("kept", "u", mtime=T2)])])
+        *_, merged, _ = run(a, b)
+        self.assertEqual(titles(merged.find("Group[Name='Sub']")), ["kept"])
+        self.assertEqual(titles(archive(merged).find("Group[Name='Sub']")), ["gone"])
 
 
 class DuplicatesAndRescueTest(unittest.TestCase):
@@ -183,7 +259,7 @@ class DuplicatesAndRescueTest(unittest.TestCase):
         self.assertEqual(len(all_entries(merged)), 2)
         self.assertEqual(report.probable, [Probable("X", "Personal", "X", "Pro")])
         self.assertEqual(report.moved, [])
-        self.assertEqual((report.only_a, report.only_b), (1, 1))
+        self.assertEqual((report.only_a, report.only_b), (0, 1))
 
     def test_repeated_hash_not_rescued(self):
         a = G("A", groups=[G("P1", [E("X", "u", "", "pw")]), G("P2", [E("X", "u", "", "pw")])])

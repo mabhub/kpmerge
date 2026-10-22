@@ -1,11 +1,17 @@
 """Merging two groups of a KeePass XML export. The input trees are never modified."""
 import copy
 from dataclasses import dataclass, field
+from datetime import datetime
 import xml.etree.ElementTree as ET
 
 from . import xmltree
 from .errors import KpmergeError
-from .report import Ambiguous, Conflict, Duplicate, Moved, OverLimit, Probable, Report
+from .report import (Ambiguous, Archived, Conflict, Duplicate, Moved, OverLimit, Probable,
+                     Report)
+
+# Subgroup of the merged group holding the entries of A missing from B (the newer export)
+ARCHIVE = "Deleted upstream (archive)"
+_TRASH_ICON = "43"
 
 
 def _history_entries(entry: ET.Element) -> list[ET.Element]:
@@ -81,6 +87,8 @@ class _Lonely:
 class _Pending:
     lonely_a: list[_Lonely] = field(default_factory=list)
     lonely_b: list[_Lonely] = field(default_factory=list)
+    # (parent, group) of the merged groups present in A only, children before parents
+    a_only_groups: list[tuple[ET.Element, ET.Element]] = field(default_factory=list)
 
 
 def _join(path: str, name: str) -> str:
@@ -148,8 +156,11 @@ def _merge_level(a: ET.Element | None, b: ET.Element | None, path: str,
             subs[_name(g)] = g
     names = list(subs_a) + [n for n in subs_b if n not in subs_a]
     for name in names:
-        out.append(_merge_level(subs_a.get(name), subs_b.get(name), _join(path, name),
-                                binaries, report, pending))
+        sub = _merge_level(subs_a.get(name), subs_b.get(name), _join(path, name),
+                           binaries, report, pending)
+        out.append(sub)
+        if name not in subs_b:
+            pending.a_only_groups.append((out, sub))
     return out
 
 
@@ -199,6 +210,72 @@ def _find_probable(pending: _Pending, binaries: dict[str, bytes], report: Report
                                                 xmltree.entry_title(lb.entry), lb.path))
 
 
+def _live_entries(group: ET.Element):
+    """Entries of the group and its subgroups, except those of a root-level archive."""
+    yield from group.findall("Entry")
+    for sub in group.findall("Group"):
+        if _name(sub) != ARCHIVE:
+            yield from (e for _, e in xmltree.iter_entries(sub))
+
+
+def _reference_time(b: ET.Element) -> datetime | None:
+    """Most recent modification date of B's entries: B is the newer export."""
+    return max((xmltree.mtime(e) for e in _live_entries(b)), default=None)
+
+
+def _archive_root(merged: ET.Element) -> ET.Element:
+    for sub in merged.findall("Group"):
+        if _name(sub) == ARCHIVE:
+            return sub
+    archive = _bare_copy(merged)
+    archive.find("Name").text = ARCHIVE
+    for tag, text in (("Notes", ""), ("IconID", _TRASH_ICON)):
+        node = archive.find(tag)
+        if node is not None:
+            node.text = text
+    merged.append(archive)
+    return archive
+
+
+def _archive_path(archive: ET.Element, live: ET.Element, path: str) -> ET.Element:
+    """Subgroup `path` of the archive, created from the live groups at the same path."""
+    node = archive
+    for part in path.split("/") if path else []:
+        live = next(g for g in live.findall("Group") if _name(g) == part)
+        found = [g for g in node.findall("Group") if _name(g) == part]
+        if found:
+            node = found[0]
+        else:
+            node.append(_bare_copy(live))
+            node = node.findall("Group")[-1]
+    return node
+
+
+def _archive_missing(merged: ET.Element, pending: _Pending, reference: datetime | None,
+                     report: Report) -> None:
+    """Move the lone A entries, older than B, to the archive group.
+
+    Without any entry in B there is no reference date: nothing is archived.
+    """
+    if reference is None:
+        return
+    touched: set[int] = set()
+    for item in pending.lonely_a:
+        title = xmltree.entry_title(item.entry)
+        if xmltree.mtime(item.entry) > reference:
+            report.kept_newer.append(Archived(item.path, title))
+            continue
+        _archive_path(_archive_root(merged), merged, item.path).append(item.entry)
+        item.group.remove(item.entry)
+        touched.add(id(item.group))
+        report.archived.append(Archived(item.path, title))
+        report.only_a -= 1
+    for parent, group in pending.a_only_groups:  # a group already empty in A stays
+        if id(group) in touched and group.find("Entry") is None and group.find("Group") is None:
+            parent.remove(group)
+            touched.add(id(parent))
+
+
 def _history_size(entry: ET.Element, binaries: dict[str, bytes]) -> int:
     hist = entry.find("History")
     if hist is None:
@@ -230,6 +307,7 @@ def merge_groups(a: ET.Element, b: ET.Element, binaries: dict[str, bytes],
     merged = _merge_level(a, b, "", binaries, report, pending)
     _rescue_by_hash(pending, binaries, report)
     _find_probable(pending, binaries, report)
+    _archive_missing(merged, pending, _reference_time(b), report)
     _check_history(merged, binaries, history_max_items, history_max_size, report)
     report.total_entries = sum(1 for _ in xmltree.iter_entries(merged))
     return merged, report

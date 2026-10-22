@@ -29,11 +29,11 @@ EXPECTED_ENTRIES = 5
 def _doc() -> bytes:
     return make_doc([
         G("Imp A", entries=[
-            E("Common", "jdoe", "https://x", password="old", mtime="2026-01-01T00:00:00Z"),
+            E("Common", "jdoe", "https://x", password="pw-old", mtime="2026-01-01T00:00:00Z"),
             E("Only A"),
         ], groups=[G("Sub", entries=[E("Sub A")])]),
         G("Imp B", entries=[
-            E("Common", "jdoe", "https://x", password="new", mtime="2026-02-01T00:00:00Z"),
+            E("Common", "jdoe", "https://x", password="pw-new", mtime="2026-02-01T00:00:00Z"),
             E("Only B"),
         ], groups=[G("Sub", entries=[E("Sub B")])]),
         G("Archive"),
@@ -107,7 +107,7 @@ class CliIntegrationTest(CliTestBase):
         self.assertEqual(stat.S_IMODE(backups[0].stat().st_mode), 0o600)
         self.assertIn("Imp A (merged)", out)
         self.assertIn(str(backups[0]), out)
-        for secret in ("old", "new", "jdoe", PW):
+        for secret in ("pw-old", "pw-new", "jdoe", PW):
             self.assertNotIn(secret, out + err)
 
     def test_dry_run_writes_nothing(self):
@@ -322,7 +322,7 @@ class CliKdbx4IntegrationTest(CliTestBase):
                       if xmltree.entry_title(e) == "Common")
         password = next(s.findtext("Value") for s in common.findall("String")
                         if s.findtext("Key") == "Password")
-        self.assertEqual(password, "new")  # the most recent (B) wins
+        self.assertEqual(password, "pw-new")  # the most recent (B) wins
 
 
 class CliUnitTest(CliTestBase):

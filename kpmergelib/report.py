@@ -44,6 +44,14 @@ class Ambiguous:
 
 
 @dataclass
+class Archived:
+    """Entry of the archive group, or lone A entry kept live by the date guard."""
+
+    path: str
+    title: str
+
+
+@dataclass
 class OverLimit:
     path: str
     title: str
@@ -64,6 +72,9 @@ class Report:
     probable: list[Probable] = field(default_factory=list)
     ambiguous: list[Ambiguous] = field(default_factory=list)
     over_limit: list[OverLimit] = field(default_factory=list)
+    archived: list[Archived] = field(default_factory=list)
+    kept_newer: list[Archived] = field(default_factory=list)
+    carried: int = 0
     total_entries: int = 0
 
 
@@ -79,6 +90,7 @@ def format_report(r: Report) -> str:
         f"Merged entries: {r.merged} (won by A: {won_a}, by B: {won_b})",
         f"Only in A: {r.only_a}",
         f"Only in B: {r.only_b}",
+        f"Archived (missing in B): {len(r.archived)} new, {r.carried} carried over",
         f"Duplicate keys: {len(r.duplicates)}",
         f"Total entries after merge: {r.total_entries}",
     ]
@@ -100,6 +112,12 @@ def format_report(r: Report) -> str:
                   if p.title_a == p.title_b else
                   f"  {p.title_a}: {_where(p.path_a)} (A) <-> {p.title_b}: {_where(p.path_b)} (B)"
                   for p in r.probable]
+    if r.archived:
+        lines += ["", "Archived (missing in B, moved to 'Deleted upstream (archive)'):"]
+        lines += [f"  {_where(x.path)} / {x.title}" for x in r.archived]
+    if r.kept_newer:
+        lines += ["", "Only in A but modified after the newest entry of B (kept):"]
+        lines += [f"  {_where(x.path)} / {x.title}" for x in r.kept_newer]
     if r.ambiguous:
         lines += ["", "Identical entries not merged (several copies on one side):"]
         lines += [f"  {x.title}: {', '.join(map(_where, x.paths_a))} (A),"
